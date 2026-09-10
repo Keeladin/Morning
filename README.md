@@ -8,12 +8,16 @@ Morning does not require Atlas to run.
 
 ## Established supervisor workflow
 
-The first production release preserves the workflow already implemented in the reference Morning application:
+Operational use has evolved the TMM supervisor workflow. The current TMM sequence is:
 
 ```text
-Start report
+Home
+    ↓
+Start / continue report
     ↓
 Attendance
+    ↓
+Brothers Keeper
     ↓
 Safety
     ↓
@@ -24,11 +28,17 @@ Other activities
 Review & submit
 ```
 
-Supervisors capture once at source. Submitted structured records then drive the downstream reporting views.
+Home is the supervisor landing page and sits outside the report-capture stages. It provides access to recent submitted TMM reports, private supervisor messaging and a shared Notice Board for broadcast notices.
+
+When starting a TMM report, the supervisor selects one or more active crews for that shift. Attendance combines the active personnel assigned to those selected crews. Machine-activity personnel assignment remains TMM-scoped and may select any active registered TMM person.
+
+Brothers Keeper is a mandatory report stage. Its contribution is captured once and projected into the review/summary, submitted historical report and WhatsApp-ready report output. Demo Mode provides the same guided workflow without creating operational reports.
+
+Supervisors capture once at source. Submitted structured records then drive the downstream reporting views. See `docs/Morning_TMM_Supervisor_Workflow_Change_2026-09-10.md` for the workflow-change record and acceptance criteria.
 
 ## Current implementation status
 
-The `implementation/standalone-foundation` branch now contains the standalone product foundation rather than the earlier seeded design mock:
+The `main` branch contains the current standalone product implementation:
 
 - React supervisor application under `src/morning/`;
 - Morning administration console for machines, personnel, crews, supervisor approval/linking, three-shift policy and daily reporting;
@@ -246,7 +256,7 @@ Construction and Mining remain validation scopes so the core model does not acci
 ## Product principles
 
 - Capture once; use many times.
-- Preserve the established supervisor workflow.
+- Preserve the established supervisor workflow while allowing deliberate operationally-driven evolution.
 - Structured source records are authoritative.
 - Reports and KPIs are deterministic projections where the truth can be calculated.
 - Work intervals, machine state and control-room delay evidence are separate concepts.
@@ -269,5 +279,7 @@ See:
 
 - `docs/Morning_Extraction_Contract_2026-08-28.md`
 - `docs/ADR-000-extraction-classification.md`
+- `docs/Morning_TMM_Supervisor_Workflow_Change_2026-09-10.md`
+- `docs/Morning_Three_Shift_Day_One_2026-09-10.md`
 
-Where older planning material conflicts with that contract or this README, the extraction contract governs the standalone implementation.
+The 28 August extraction contract governs the standalone foundation. The 10 September workflow and three-shift records document later operationally-driven evolution and supersede older staged-workflow or two-shift descriptions where they differ. Additional product-direction material remains under `docs/` as historical design context.
