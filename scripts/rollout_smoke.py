@@ -77,6 +77,7 @@ def submit_shift(
     shift_date: str,
     shift_kind: str,
     person_id: str,
+    crew_id: str,
     machine_id: str,
     with_detail: bool,
 ) -> str:
@@ -85,7 +86,7 @@ def submit_shift(
         "POST",
         "/api/morning/draft",
         csrf=csrf,
-        payload={"shift_date": shift_date, "shift_kind": shift_kind},
+        payload={"shift_date": shift_date, "shift_kind": shift_kind, "crew_ids": [crew_id]},
         expected=(200, 201),
     )
     report_id = report["id"]
@@ -96,6 +97,14 @@ def submit_shift(
         f"/api/morning/reports/{report_id}/attendance",
         csrf=csrf,
         payload={"entries": [{"person_id": person_id, "present": True}]},
+    )
+
+    api(
+        client,
+        "PUT",
+        f"/api/morning/reports/{report_id}/brothers-keeper",
+        csrf=csrf,
+        payload={"contribution": "Rollout smoke safety contribution"},
     )
 
     if with_detail:
@@ -282,6 +291,7 @@ def main() -> int:
                 shift_date=shift_date,
                 shift_kind="morning",
                 person_id=person["id"],
+                crew_id=crew["id"],
                 machine_id=machine["id"],
                 with_detail=True,
             )
@@ -291,6 +301,7 @@ def main() -> int:
                 shift_date=shift_date,
                 shift_kind="afternoon",
                 person_id=person["id"],
+                crew_id=crew["id"],
                 machine_id=machine["id"],
                 with_detail=False,
             )
@@ -300,6 +311,7 @@ def main() -> int:
                 shift_date=shift_date,
                 shift_kind="night",
                 person_id=person["id"],
+                crew_id=crew["id"],
                 machine_id=machine["id"],
                 with_detail=False,
             )
