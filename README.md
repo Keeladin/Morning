@@ -8,12 +8,16 @@ This is not a disposable prototype. The current implementation is the production
 
 ## Established supervisor workflow
 
-The existing Morning implementation remains the functional reference for the first production release:
+Operational use has evolved the TMM supervisor workflow. The current TMM sequence is:
 
 ```text
-Start report
+Home
+    ↓
+Start / continue report
     ↓
 Attendance
+    ↓
+Brothers Keeper
     ↓
 Safety
     ↓
@@ -24,7 +28,13 @@ Other activities
 Review & submit
 ```
 
-That workflow is established and should be preserved unless operational use provides a concrete reason to change it.
+Home is the supervisor landing page and sits outside the report-capture stages. It provides access to the five most recent submitted TMM reports, private supervisor messaging and a shared Notice Board for broadcast notices.
+
+Attendance remains crew-scoped. Machine-activity personnel assignment is TMM-scoped and may select any active registered TMM person.
+
+Brothers Keeper is a mandatory report stage. Its contribution is captured once and must be projected into the review/summary, submitted historical report and WhatsApp-ready report output.
+
+See `docs/Morning_TMM_Supervisor_Workflow_Change_2026-09-10.md` for the agreed implementation and acceptance criteria.
 
 ## Production direction
 
@@ -82,7 +92,7 @@ The organisational model should retain a clean hierarchy seam so operational uni
 ## Product principles
 
 - Capture once; use many times.
-- Preserve the established supervisor workflow.
+- Preserve the established supervisor workflow while allowing deliberate operationally-driven evolution.
 - Structured source records are authoritative.
 - Reports and KPIs are deterministic projections where the truth can be calculated.
 - Work intervals and machine state are separate concepts.
@@ -125,7 +135,8 @@ npm run build
 See:
 
 - `docs/Morning_Extraction_Contract_2026-08-28.md`
+- `docs/Morning_TMM_Supervisor_Workflow_Change_2026-09-10.md`
 
-Where older planning material conflicts with that contract or this README, the extraction contract governs the standalone Morning implementation.
+The 28 August extraction contract governs the standalone foundation. The 10 September TMM workflow change records later operationally-driven product evolution and supersedes the older staged-workflow description where the two differ.
 
 Additional product-direction material remains under `docs/` as historical design context.
