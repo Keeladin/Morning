@@ -62,6 +62,6 @@ export function ReviewStage({ report, machines, people, principal, onBack, onSub
     {!construction && report.machine_events.length ? <details className="morning-review-detail"><summary>Machine work</summary>{report.machine_events.map(event => <div key={event.id} className="meta">{machineLabel(machines, event.machine_id)} · {personName(people, event.person_id || '')} · {hhmm(event.start_time)}–{hhmm(event.end_time)}: {event.issue}</div>)}</details> : null}
     {report.attendance.filter(e => !e.present).length ? <details className="morning-review-detail"><summary>Absent</summary>{report.attendance.filter(e => !e.present).map(e => <div key={e.person_id} className="meta">{personName(people, e.person_id)}</div>)}</details> : null}
     {error ? <p className="error-text">{error}</p> : null}
-    <div className="morning-stage-nav">{onBack ? <button type="button" onClick={onBack}>Back</button> : null}<button type="button" className="primary" disabled={pending} onClick={() => void submit()}>{pending ? 'Submitting…' : 'Submit shift report'}</button></div>
+    <div className="morning-stage-nav morning-review-actions">{onBack ? <button type="button" onClick={onBack}>Back</button> : null}<button type="button" className="primary" disabled={pending} onClick={() => void submit()}>{pending ? 'Submitting…' : 'Submit shift report'}</button></div>
   </div>
 }

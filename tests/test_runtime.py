@@ -69,6 +69,31 @@ def test_shift_draft_roster_and_submission_semantics(runtime) -> None:
         app.add_other_activity(first.id, category=None, description="too late")
 
 
+def test_multicrew_submission_accepts_complete_combined_attendance(runtime) -> None:
+    app, store, supervisor = runtime
+    crew_a = store.create_crew(name="Crew A")
+    crew_b = store.create_crew(name="Crew B")
+    person_a = store.create_person(name="Jurie", employee_number=None, role="Supervisor", crew_id=crew_a.id)
+    person_b = store.create_person(name="Peet", employee_number=None, role="Fitter", crew_id=crew_b.id)
+    store.link_account_person(supervisor.principal_id, person_a.id)
+    report = app.start_draft(
+        supervisor.principal_id,
+        shift_date="2026-03-25",
+        shift_kind="night",
+        crew_ids=(crew_a.id, crew_b.id),
+    )
+    assert report.crew_ids == (crew_a.id, crew_b.id)
+    app.set_attendance(report.id, (AttendanceEntry(person_a.id, True), AttendanceEntry(person_b.id, False)))
+    app.set_brothers_keeper(report.id, "Keep access routes clear.")
+    app.set_empty_section_reviewed(report.id, section="safety", reviewed=True)
+    app.set_empty_section_reviewed(report.id, section="machine_activity", reviewed=True)
+    app.set_empty_section_reviewed(report.id, section="other_activities", reviewed=True)
+
+    submitted = app.submit_report(report.id)
+
+    assert submitted.status == "submitted"
+
+
 def test_machine_event_round_trip_keeps_operational_wall_clock_for_edits(runtime) -> None:
     app, store, supervisor = runtime
     crew = store.create_crew(name="Crew A")

@@ -82,7 +82,8 @@ async def get_admin_config(request: Request) -> JSONResponse:
 
 async def create_level(request: Request) -> JSONResponse:
     gate = require_admin(request, mutation=True, workspace="construction")
-    if isinstance(gate, JSONResponse): return gate
+    if isinstance(gate, JSONResponse):
+        return gate
     try:
         body = await request.json() or {}
         row = _runtime(request).store.create_construction_level(level=str(body.get("level") or ""))
@@ -95,7 +96,8 @@ async def create_level(request: Request) -> JSONResponse:
 
 async def update_level(request: Request) -> JSONResponse:
     gate = require_admin(request, mutation=True, workspace="construction")
-    if isinstance(gate, JSONResponse): return gate
+    if isinstance(gate, JSONResponse):
+        return gate
     try:
         body = await request.json() or {}
         row = _runtime(request).store.update_construction_level(
@@ -110,7 +112,8 @@ async def update_level(request: Request) -> JSONResponse:
 
 async def set_level_active(request: Request, active: bool) -> JSONResponse:
     gate = require_admin(request, mutation=True, workspace="construction")
-    if isinstance(gate, JSONResponse): return gate
+    if isinstance(gate, JSONResponse):
+        return gate
     try:
         row = _runtime(request).store.set_construction_level_active(request.path_params["level_id"], active=active)
         return JSONResponse(row)
@@ -128,7 +131,8 @@ async def deactivate_level(request: Request) -> JSONResponse:
 
 async def create_workstream(request: Request) -> JSONResponse:
     gate = require_admin(request, mutation=True, workspace="construction")
-    if isinstance(gate, JSONResponse): return gate
+    if isinstance(gate, JSONResponse):
+        return gate
     try:
         body = await request.json() or {}
         row = _runtime(request).store.create_construction_workstream(name=str(body.get("name") or ""))
@@ -141,7 +145,8 @@ async def create_workstream(request: Request) -> JSONResponse:
 
 async def set_workstream_active(request: Request, active: bool) -> JSONResponse:
     gate = require_admin(request, mutation=True, workspace="construction")
-    if isinstance(gate, JSONResponse): return gate
+    if isinstance(gate, JSONResponse):
+        return gate
     try:
         row = _runtime(request).store.set_construction_workstream_active(request.path_params["workstream_id"], active=active)
         return JSONResponse(row)
@@ -159,7 +164,8 @@ async def deactivate_workstream(request: Request) -> JSONResponse:
 
 async def create_crew(request: Request) -> JSONResponse:
     gate = require_admin(request, mutation=True, workspace="construction")
-    if isinstance(gate, JSONResponse): return gate
+    if isinstance(gate, JSONResponse):
+        return gate
     try:
         body = await request.json() or {}
         row = _runtime(request).store.create_construction_crew(
@@ -175,12 +181,15 @@ async def create_crew(request: Request) -> JSONResponse:
 
 async def update_crew(request: Request) -> JSONResponse:
     gate = require_admin(request, mutation=True, workspace="construction")
-    if isinstance(gate, JSONResponse): return gate
+    if isinstance(gate, JSONResponse):
+        return gate
     try:
         body = await request.json() or {}
         kwargs: dict[str, Any] = {}
-        if "name" in body: kwargs["name"] = str(body["name"])
-        if "workstream_id" in body: kwargs["workstream_id"] = body["workstream_id"] or None
+        if "name" in body:
+            kwargs["name"] = str(body["name"])
+        if "workstream_id" in body:
+            kwargs["workstream_id"] = body["workstream_id"] or None
         row = _runtime(request).store.update_construction_crew(request.path_params["crew_id"], **kwargs)
         return JSONResponse(row)
     except json.JSONDecodeError:
@@ -191,7 +200,8 @@ async def update_crew(request: Request) -> JSONResponse:
 
 async def set_crew_active(request: Request, active: bool) -> JSONResponse:
     gate = require_admin(request, mutation=True, workspace="construction")
-    if isinstance(gate, JSONResponse): return gate
+    if isinstance(gate, JSONResponse):
+        return gate
     try:
         row = _runtime(request).store.set_construction_crew_active(request.path_params["crew_id"], active=active)
         return JSONResponse(row)
@@ -209,7 +219,8 @@ async def deactivate_crew(request: Request) -> JSONResponse:
 
 async def create_person(request: Request) -> JSONResponse:
     gate = require_admin(request, mutation=True, workspace="construction")
-    if isinstance(gate, JSONResponse): return gate
+    if isinstance(gate, JSONResponse):
+        return gate
     runtime = _runtime(request)
     try:
         body = await request.json() or {}
@@ -229,7 +240,8 @@ async def create_person(request: Request) -> JSONResponse:
 
 async def update_person(request: Request) -> JSONResponse:
     gate = require_admin(request, mutation=True, workspace="construction")
-    if isinstance(gate, JSONResponse): return gate
+    if isinstance(gate, JSONResponse):
+        return gate
     runtime = _runtime(request)
     try:
         body = await request.json() or {}
@@ -249,7 +261,8 @@ async def update_person(request: Request) -> JSONResponse:
 
 async def set_person_active(request: Request, active: bool) -> JSONResponse:
     gate = require_admin(request, mutation=True, workspace="construction")
-    if isinstance(gate, JSONResponse): return gate
+    if isinstance(gate, JSONResponse):
+        return gate
     runtime = _runtime(request)
     try:
         person = runtime.store.get_person(request.path_params["person_id"])

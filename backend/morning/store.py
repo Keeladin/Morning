@@ -1275,11 +1275,20 @@ class MorningStore:
                     "SELECT person_id FROM morning_attendance WHERE report_id=%s", (report_id,)
                 ).fetchall()
             }
+            crew_ids = [
+                row["crew_id"] for row in db.execute(
+                    "SELECT crew_id FROM morning_report_crews WHERE report_id=%s ORDER BY position, crew_id",
+                    (report_id,),
+                ).fetchall()
+            ]
+            if not crew_ids and report["crew_id"]:
+                crew_ids = [report["crew_id"]]
             expected_ids = {
                 row["id"] for row in db.execute(
-                    "SELECT id FROM morning_persons WHERE crew_id=%s AND active=true", (report["crew_id"],)
+                    "SELECT id FROM morning_persons WHERE crew_id = ANY(%s) AND active=true",
+                    (crew_ids,),
                 ).fetchall()
-            } if report["crew_id"] else set()
+            } if crew_ids else set()
             missing: list[str] = []
             if not expected_ids or attendance_ids != expected_ids:
                 missing.append("attendance")
