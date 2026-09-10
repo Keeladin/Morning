@@ -56,6 +56,10 @@ The `main` branch contains the current standalone product implementation:
 
 The previous `src/` fake-data design surface has been replaced as the application entry point. It is no longer the production frontend description.
 
+## User operation manual
+
+The current TMM supervisor operation manual is maintained at [`docs/manual/Morning_TMM_User_Instruction_Manual.md`](docs/manual/Morning_TMM_User_Instruction_Manual.md). It covers the three-shift calendar, multi-crew selection, offline reporting, Demo Mode and the Morning Control Centre functions used for TMM.
+
 ## Architecture
 
 Morning launches as a modular monolith:
