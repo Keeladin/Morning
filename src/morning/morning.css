@@ -146,3 +146,6 @@ button{border-radius:10px;border-color:#c8d8e4;color:#173a56;background:#fff;box
 .morning-crew-options label:hover{border-color:#8abbd9;background:#f7fbfe}.morning-crew-options label.selected{border-color:#49a77a;background:#ecf8f1;box-shadow:0 0 0 2px rgba(53,166,109,.08)}
 .morning-crew-options input[type=checkbox]{order:2;flex:0 0 22px;width:22px!important;height:22px!important;min-height:22px!important;margin:0!important;padding:0!important;border-radius:5px;accent-color:#249b64;cursor:pointer}
 @media(max-width:560px){.morning-crew-picker{padding:.85rem}.morning-crew-options label{min-height:52px;padding:.65rem .75rem;font-size:.88rem}}
+
+/* Mobile workflow actions stay in document flow so roster/content is never hidden behind them. */
+@media(max-width:760px){.morning-stage-nav{position:static;bottom:auto;z-index:auto;margin:.75rem 0 0;padding:0;background:transparent;border-top:0;box-shadow:none}.morning-main{padding-bottom:calc(6rem + env(safe-area-inset-bottom))}}
