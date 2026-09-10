@@ -42,8 +42,13 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - run: npm install
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run test
       - run: npm run build
+      - run: test -f dist/manifest.webmanifest && test -f dist/sw.js
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e
 
   containers:
     runs-on: ubuntu-latest

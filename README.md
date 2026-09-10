@@ -31,11 +31,12 @@ Supervisors capture once at source. Submitted structured records then drive the 
 The `implementation/standalone-foundation` branch now contains the standalone product foundation rather than the earlier seeded design mock:
 
 - React supervisor application under `src/morning/`;
-- Morning administration console for machines, personnel, crews, supervisor approval/linking, shift policy and daily reporting;
+- Morning administration console for machines, personnel, crews, supervisor approval/linking, three-shift policy and daily reporting;
 - standalone Starlette API under `backend/morning/`;
 - Morning-owned accounts, principals, roles, signed sessions and CSRF protection;
 - PostgreSQL persistence with Alembic migrations;
 - the established draft → staged capture → submit workflow;
+- three-shift operating model: Morning 06:00–14:00, Afternoon 14:00–22:00, Night 22:00–06:00;
 - deterministic WhatsApp, detailed 24-hour and compact meeting reports;
 - explicit machine-state declarations separate from engineering work intervals;
 - control-room Production Delays ingestion from pasted text or PDF text-layer extraction;
@@ -215,7 +216,7 @@ The restore path performs a clean restore and reapplies Alembic to head. See `do
 1. administrator login;
 2. machine, crew and personnel configuration;
 3. supervisor registration, approval and personnel link;
-4. day and night shift capture;
+4. Morning (06:00–14:00), Afternoon (14:00–22:00) and Night (22:00–06:00) shift capture;
 5. attendance, safety, machine work, machine state and other activity;
 6. submission and WhatsApp projection;
 7. control-room Production Delays ingestion;

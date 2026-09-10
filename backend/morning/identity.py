@@ -15,6 +15,8 @@ class Principal:
     display_name: str
     role: str
     status: str
+    admin_workspace: str | None = None
+    demo_mode: bool = False
 
     @property
     def active(self) -> bool:
@@ -33,12 +35,16 @@ class MorningIdentity:
     def __init__(self, store: MorningStore) -> None:
         self.store = store
 
-    def create_principal(self, principal_id: str, display_name: str, *, role: str) -> Principal:
+    def create_principal(
+        self, principal_id: str, display_name: str, *, role: str, admin_workspace: str | None = None, demo_mode: bool = False
+    ) -> Principal:
         row = self.store.create_principal(
             principal_id=principal_id,
             display_name=display_name,
             role=role,
             status="active",
+            admin_workspace=admin_workspace,
+            demo_mode=demo_mode,
         )
         return self._from_row(row)
 
@@ -65,4 +71,6 @@ class MorningIdentity:
             display_name=row["display_name"],
             role=row["role"],
             status=row["status"],
+            admin_workspace=row.get("admin_workspace"),
+            demo_mode=bool(row.get("demo_mode", False)),
         )

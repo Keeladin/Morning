@@ -30,7 +30,7 @@ def store() -> MorningStore:
     database_url = os.environ["MORNING_DATABASE_URL"]
     engine = create_database_engine(database_url)
     with engine.begin() as connection:
-        connection.execute(text("TRUNCATE TABLE morning_principals, morning_crews, morning_machines CASCADE"))
+        connection.execute(text("TRUNCATE TABLE morning_construction_levels, morning_construction_workstreams, morning_principals, morning_crews, morning_machines CASCADE"))
         connection.execute(text("DELETE FROM morning_shift_policy"))
     engine.dispose()
     return MorningStore(database_url)
@@ -46,7 +46,7 @@ def _draft(
     *,
     principal_id: str = "p1",
     shift_date: str = "2026-03-25",
-    shift_kind: str = "day",
+    shift_kind: str = "morning",
     crew_id: str | None = None,
 ):
     if store.principal_by_id(principal_id) is None:
@@ -63,11 +63,14 @@ def test_shift_policy_round_trips(store: MorningStore) -> None:
     assert store.get_shift_policy() is None
     saved = store.set_shift_policy(
         timezone="Africa/Johannesburg",
-        day_shift_start="06:00",
-        night_shift_start="18:00",
+        morning_shift_start="06:00",
+        afternoon_shift_start="14:00",
+        night_shift_start="22:00",
     )
     assert saved.timezone == "Africa/Johannesburg"
-    assert store.get_shift_policy().day_shift_start == "06:00"
+    assert store.get_shift_policy().morning_shift_start == "06:00"
+    assert store.get_shift_policy().afternoon_shift_start == "14:00"
+    assert store.get_shift_policy().night_shift_start == "22:00"
 
 
 def test_machine_identity_deactivate_and_control_room_scope(store: MorningStore) -> None:
@@ -132,10 +135,10 @@ def test_draft_is_idempotent_and_snapshots_crew(store: MorningStore) -> None:
     crew_a = store.create_crew(name="Crew A")
     crew_b = store.create_crew(name="Crew B")
     first = store.get_or_create_draft(
-        supervisor_principal_id="p1", shift_date="2026-03-25", shift_kind="day", crew_id=crew_a.id
+        supervisor_principal_id="p1", shift_date="2026-03-25", shift_kind="morning", crew_id=crew_a.id
     )
     resumed = store.get_or_create_draft(
-        supervisor_principal_id="p1", shift_date="2026-03-25", shift_kind="day", crew_id=crew_b.id
+        supervisor_principal_id="p1", shift_date="2026-03-25", shift_kind="morning", crew_id=crew_b.id
     )
     assert resumed.id == first.id
     assert resumed.crew_id == crew_a.id
@@ -147,7 +150,7 @@ def test_abandon_frees_slot_without_deleting_old_entries(store: MorningStore) ->
     abandoned = store.abandon_report(draft.id)
     assert abandoned.status == "abandoned"
     fresh = store.get_or_create_draft(
-        supervisor_principal_id="p1", shift_date="2026-03-25", shift_kind="day", crew_id=None
+        supervisor_principal_id="p1", shift_date="2026-03-25", shift_kind="morning", crew_id=None
     )
     assert fresh.id != draft.id
     assert fresh.other_activities == ()
@@ -155,7 +158,14 @@ def test_abandon_frees_slot_without_deleting_old_entries(store: MorningStore) ->
 
 
 def test_submit_freezes_report_mutations(store: MorningStore) -> None:
-    draft = _draft(store)
+    crew = store.create_crew(name="Submission Crew")
+    person = store.create_person(name="Reporter", employee_number=None, role="Supervisor", crew_id=crew.id)
+    draft = _draft(store, crew_id=crew.id)
+    store.replace_attendance(draft.id, (AttendanceEntry(person.id, True),))
+    store.set_brothers_keeper(draft.id, "Improve workshop access lighting.")
+    store.set_empty_section_reviewed(draft.id, "safety", True)
+    store.set_empty_section_reviewed(draft.id, "machine_activity", True)
+    store.set_empty_section_reviewed(draft.id, "other_activities", True)
     submitted = store.submit_report(draft.id)
     assert submitted.status == "submitted"
     assert submitted.submitted_at is not None
@@ -262,3 +272,32 @@ def test_control_room_observations_scope_to_reporting_date(store: MorningStore) 
 def test_unknown_report_raises(store: MorningStore) -> None:
     with pytest.raises(UnknownRecordError):
         store.get_report("shiftreport_does_not_exist")
+
+
+def test_brothers_keeper_round_trip_and_delete_history_protection(store: MorningStore) -> None:
+    crew = store.create_crew(name="BK Crew")
+    person = store.create_person(name="BK Artisan", employee_number="BK1", role="Fitter", crew_id=crew.id)
+    machine = store.create_machine(machine_id="BK-RLH", machine_type="LHD", section=None)
+    report = _draft(store, crew_id=crew.id)
+    updated = store.set_brothers_keeper(report.id, "Repair the damaged pedestrian barrier.")
+    assert updated.brothers_keeper == "Repair the damaged pedestrian barrier."
+    store.replace_attendance(report.id, (AttendanceEntry(person.id, True),))
+    store.add_machine_event(report.id, MachineEvent(id=new_id("event"), machine_id=machine.id, start_time="2026-03-25T08:00:00+02:00", end_time="2026-03-25T08:20:00+02:00", issue="Inspection", person_id=person.id))
+    with pytest.raises(MorningError, match="operational history"):
+        store.delete_person(person.id)
+    with pytest.raises(MorningError, match="operational history"):
+        store.delete_machine(machine.id)
+
+
+def test_direct_messages_are_private_and_announcements_are_separate(store: MorningStore) -> None:
+    for principal_id, name in (("s1", "Supervisor One"), ("s2", "Supervisor Two"), ("s3", "Supervisor Three")):
+        store.create_principal(principal_id=principal_id, display_name=name, role="supervisor")
+        store.create_account(principal_id=principal_id, username=principal_id, password_hash="h", password_salt="s")
+        store.approve_account(principal_id)
+    direct = store.create_message(sender_principal_id="s1", recipient_principal_id="s2", kind="direct", body="Private handover")
+    store.create_message(sender_principal_id="s1", kind="announcement", body="General notice")
+    assert [item["body"] for item in store.list_direct_messages("s2")] == ["Private handover"]
+    assert store.list_direct_messages("s3") == ()
+    assert [item["body"] for item in store.list_announcements()] == ["General notice"]
+    read = store.mark_message_read(direct["id"], "s2")
+    assert read["read_at"] is not None

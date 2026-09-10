@@ -34,6 +34,8 @@ async def register(request: Request) -> JSONResponse:
                 "principal_id": principal.principal_id,
                 "display_name": principal.display_name,
                 "role": principal.role,
+                "admin_workspace": principal.admin_workspace,
+                "demo_mode": principal.demo_mode,
             },
         },
         status_code=201,
@@ -61,6 +63,8 @@ async def login(request: Request) -> JSONResponse:
                 "principal_id": principal.principal_id,
                 "display_name": principal.display_name,
                 "role": principal.role,
+                "admin_workspace": principal.admin_workspace,
+                "demo_mode": principal.demo_mode,
             },
             "csrf_token": session.csrf_token,
         }
@@ -93,6 +97,8 @@ async def session(request: Request) -> JSONResponse:
                 "principal_id": principal.principal_id,
                 "display_name": principal.display_name,
                 "role": principal.role,
+                "admin_workspace": principal.admin_workspace,
+                "demo_mode": principal.demo_mode,
             },
             "csrf_token": current.csrf_token,
         }

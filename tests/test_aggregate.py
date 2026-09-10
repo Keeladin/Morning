@@ -16,11 +16,13 @@ def _report(*events: MachineEvent, shift_kind: str = "night") -> ShiftReport:
         shift_kind=shift_kind,
         supervisor_principal_id="p1",
         crew_id=None,
+        reporting_model="tmm",
         status="submitted",
         attendance=(),
         stop_fix=(),
         cards=(),
         machine_events=events,
+        construction_work=(),
         other_activities=(),
         created_at="now",
         updated_at="now",
@@ -96,11 +98,11 @@ def test_report_renderer_uses_explicit_state_and_never_calls_work_time_downtime(
 
 
 def test_expected_inputs_still_drive_waiting_vs_complete() -> None:
-    day = _report(shift_kind="day")
+    morning = _report(shift_kind="morning")
     bundle = build_report_bundle(
         reporting_date="2026-03-25",
         timezone="Africa/Johannesburg",
-        shift_reports=(day,),
+        shift_reports=(morning,),
         observations=(),
         machine_states=(),
         machines_by_id={},
@@ -108,4 +110,4 @@ def test_expected_inputs_still_drive_waiting_vs_complete() -> None:
         require_control_room=True,
     )
     assert bundle.status == "waiting"
-    assert {item.key for item in bundle.expected_inputs if not item.present} == {"night_shift_report", "control_room_report"}
+    assert {item.key for item in bundle.expected_inputs if not item.present} == {"afternoon_shift_report", "night_shift_report", "control_room_report"}

@@ -16,3 +16,8 @@ venv/
 .env
 .env.*
 !.env.example
+
+# Runtime and local QA artifacts
+backups/
+test-results/
+tmp-*.png

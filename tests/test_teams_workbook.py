@@ -45,7 +45,7 @@ def _bundle(*, work_seconds: float, delay_seconds: float) -> ReportBundle:
             stop_fix_records=(stop_fix,),
         ),
         other_activities=(),
-        expected_inputs=(ExpectedInputStatus(key="day_shift_report", label="Day shift report", present=True),),
+        expected_inputs=(ExpectedInputStatus(key="morning_shift_report", label="Morning shift report", present=True),),
         status="complete",
     )
 

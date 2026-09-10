@@ -220,11 +220,19 @@ def build_report_bundle(
         for activity in report.other_activities
     )
 
-    has_day = any(report.shift_kind == "day" for report in shift_reports)
-    has_night = any(report.shift_kind == "night" for report in shift_reports)
     expected = [
-        ExpectedInputStatus(key="day_shift_report", label="Day shift report", present=has_day),
-        ExpectedInputStatus(key="night_shift_report", label="Night shift report", present=has_night),
+        ExpectedInputStatus(
+            key="morning_shift_report", label="Morning shift report",
+            present=any(report.shift_kind == "morning" for report in shift_reports),
+        ),
+        ExpectedInputStatus(
+            key="afternoon_shift_report", label="Afternoon shift report",
+            present=any(report.shift_kind == "afternoon" for report in shift_reports),
+        ),
+        ExpectedInputStatus(
+            key="night_shift_report", label="Night shift report",
+            present=any(report.shift_kind == "night" for report in shift_reports),
+        ),
     ]
     if require_control_room:
         expected.append(

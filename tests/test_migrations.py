@@ -19,6 +19,7 @@ EXPECTED_TABLES = {
     "morning_crews",
     "morning_machine_events",
     "morning_machine_state_declarations",
+    "morning_messages",
     "morning_machines",
     "morning_other_activities",
     "morning_persons",
@@ -103,14 +104,14 @@ def test_one_non_abandoned_report_per_supervisor_shift_is_database_enforced() ->
             connection.execute(
                 text(
                     "INSERT INTO morning_reports (id, shift_date, shift_kind, supervisor_principal_id, status) "
-                    "VALUES ('report-a', DATE '2026-08-28', 'day', 'principal-report', 'draft')"
+                    "VALUES ('report-a', DATE '2026-08-28', 'morning', 'principal-report', 'draft')"
                 )
             )
             with pytest.raises(IntegrityError):
                 connection.execute(
                     text(
                         "INSERT INTO morning_reports (id, shift_date, shift_kind, supervisor_principal_id, status) "
-                        "VALUES ('report-b', DATE '2026-08-28', 'day', 'principal-report', 'draft')"
+                        "VALUES ('report-b', DATE '2026-08-28', 'morning', 'principal-report', 'draft')"
                     )
                 )
     finally:
@@ -142,7 +143,7 @@ def test_machine_state_requires_explicit_other_note_and_honest_carry_provenance(
             connection.execute(
                 text(
                     "INSERT INTO morning_reports (id, shift_date, shift_kind, supervisor_principal_id) "
-                    "VALUES ('state-report', DATE '2026-08-28', 'day', 'state-p')"
+                    "VALUES ('state-report', DATE '2026-08-28', 'morning', 'state-p')"
                 )
             )
             with pytest.raises(IntegrityError):

@@ -120,7 +120,9 @@ def require_mutation_auth(request: Request) -> SessionData | JSONResponse:
     return session
 
 
-def require_admin(request: Request, *, mutation: bool = False) -> SessionData | JSONResponse:
+def require_admin(
+    request: Request, *, mutation: bool = False, workspace: str = "morning"
+) -> SessionData | JSONResponse:
     session = require_mutation_auth(request) if mutation else require_session(request)
     if isinstance(session, JSONResponse):
         return session
@@ -131,4 +133,9 @@ def require_admin(request: Request, *, mutation: bool = False) -> SessionData | 
         return unauthorized()
     if principal.role != "admin":
         return JSONResponse({"error": "admin role required"}, status_code=403)
+    if principal.admin_workspace != workspace:
+        return JSONResponse(
+            {"error": f"{workspace} administrator access required", "admin_workspace": principal.admin_workspace},
+            status_code=403,
+        )
     return session

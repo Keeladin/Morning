@@ -55,6 +55,7 @@ class MorningAccounts:
         display_name: str,
         role: str,
         approve: bool,
+        admin_workspace: str | None = None,
     ) -> Principal:
         username, display_name = self._validate_credentials(
             username=username,
@@ -63,11 +64,18 @@ class MorningAccounts:
         )
         if self.store.account_by_username(username) is not None:
             raise AccountError("username is already registered")
+        if role == "supervisor" and self.store.supervisor_principal_by_display_name(display_name) is not None:
+            raise AccountError(
+                "a supervisor account is already registered for this full name; "
+                "ask a Morning administrator to correct or reset the existing account"
+            )
 
         principal_id = f"principal_{uuid4().hex}"
         salt = os.urandom(16)
         password_hash = _hash_password(password, salt)
-        principal = self.identities.create_principal(principal_id, display_name, role=role)
+        principal = self.identities.create_principal(
+            principal_id, display_name, role=role, admin_workspace=admin_workspace
+        )
         try:
             self.store.create_account(
                 principal_id=principal_id,
@@ -89,17 +97,29 @@ class MorningAccounts:
             display_name=display_name,
             role="supervisor",
             approve=False,
+            admin_workspace=None,
         )
 
-    def create_admin(self, *, username: str, password: str, display_name: str) -> Principal:
-        """Operator-only bootstrap helper. Do not expose as a public route."""
+    def create_admin(
+        self, *, username: str, password: str, display_name: str, workspace: str = "morning"
+    ) -> Principal:
+        """Create an approved administrator scoped to exactly one Morning workspace."""
 
+        workspace = workspace.strip().casefold()
+        if not workspace:
+            raise AccountError("admin workspace is required")
         return self._create_account(
             username=username,
             password=password,
             display_name=display_name,
             role="admin",
             approve=True,
+            admin_workspace=workspace,
+        )
+
+    def list_admins(self, *, workspace: str) -> tuple[Principal, ...]:
+        return tuple(
+            self.identities._from_row(row) for row in self.store.list_admin_principals(workspace=workspace)
         )
 
     def authenticate(self, *, username: str, password: str) -> Principal:

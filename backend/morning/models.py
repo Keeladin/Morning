@@ -4,17 +4,23 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 
-ShiftKind = Literal["day", "night"]
+ShiftKind = Literal["morning", "afternoon", "night"]
 ReportStatus = Literal["draft", "submitted", "abandoned"]
 CardType = Literal["red", "green"]
 StopFixStatus = Literal["open", "rectified"]
 MorningReportStatus = Literal["waiting", "complete"]
 MachineState = Literal["running", "not_tested", "under_repair", "awaiting_parts", "other"]
 MachineStateProvenance = Literal["declared", "carried"]
+ReportingModel = Literal["tmm", "construction"]
+ConstructionWorkKind = Literal["core", "outstanding"]
+ConstructionWorkStatus = Literal["not_started", "in_progress", "held", "complete"]
 
-SHIFT_KINDS: frozenset[str] = frozenset({"day", "night"})
+SHIFT_KINDS: frozenset[str] = frozenset({"morning", "afternoon", "night"})
 CARD_TYPES: frozenset[str] = frozenset({"red", "green"})
 STOP_FIX_STATUSES: frozenset[str] = frozenset({"open", "rectified"})
+REPORTING_MODELS: frozenset[str] = frozenset({"tmm", "construction"})
+CONSTRUCTION_WORK_KINDS: frozenset[str] = frozenset({"core", "outstanding"})
+CONSTRUCTION_WORK_STATUSES: frozenset[str] = frozenset({"not_started", "in_progress", "held", "complete"})
 MACHINE_STATES: tuple[MachineState, ...] = (
     "running",
     "not_tested",
@@ -39,21 +45,22 @@ STOP_FIX_AREAS: tuple[str, ...] = (
 
 @dataclass(frozen=True)
 class ShiftPolicy:
-    """Configuration, not hard-coded UI logic. A singleton per deployment."""
+    """Configured three-shift operating cycle for this deployment."""
 
     timezone: str
-    day_shift_start: str
+    morning_shift_start: str
+    afternoon_shift_start: str
     night_shift_start: str
-    updated_at: str
+    updated_at: str = ""
 
     def as_dict(self) -> dict[str, Any]:
         return {
             "timezone": self.timezone,
-            "day_shift_start": self.day_shift_start,
+            "morning_shift_start": self.morning_shift_start,
+            "afternoon_shift_start": self.afternoon_shift_start,
             "night_shift_start": self.night_shift_start,
             "updated_at": self.updated_at,
         }
-
 
 @dataclass(frozen=True)
 class ShiftIdentity:
@@ -188,6 +195,7 @@ class MachineEvent:
     start_time: str
     end_time: str
     issue: str
+    person_id: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -196,6 +204,7 @@ class MachineEvent:
             "start_time": self.start_time,
             "end_time": self.end_time,
             "issue": self.issue,
+            "person_id": self.person_id,
         }
 
 
@@ -234,6 +243,29 @@ class MachineStateDeclaration:
 
 
 @dataclass(frozen=True)
+class ConstructionWorkItem:
+    """A structured Construction workfront update captured once per shift."""
+
+    id: str
+    kind: ConstructionWorkKind
+    level: str
+    location: str
+    task: str
+    status: ConstructionWorkStatus
+    progress_percent: int | None
+    update_text: str
+    constraint_text: str | None
+    next_action: str | None
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id, "kind": self.kind, "level": self.level, "location": self.location,
+            "task": self.task, "status": self.status, "progress_percent": self.progress_percent,
+            "update_text": self.update_text, "constraint_text": self.constraint_text, "next_action": self.next_action,
+        }
+
+
+@dataclass(frozen=True)
 class OtherActivity:
     id: str
     category: str | None
@@ -252,14 +284,23 @@ class ShiftReport:
     shift_kind: ShiftKind
     supervisor_principal_id: str
     crew_id: str | None
+    reporting_model: ReportingModel
     status: ReportStatus
     attendance: tuple[AttendanceEntry, ...]
     stop_fix: tuple[StopFixRecord, ...]
     cards: tuple[CardObservation, ...]
     machine_events: tuple[MachineEvent, ...]
+    construction_work: tuple[ConstructionWorkItem, ...]
     other_activities: tuple[OtherActivity, ...]
     created_at: str
     updated_at: str
+    crew_ids: tuple[str, ...] = ()
+    brothers_keeper: str | None = None
+    safety_reviewed_empty: bool = False
+    machine_activity_reviewed_empty: bool = False
+    other_activities_reviewed_empty: bool = False
+    construction_work_reviewed_empty: bool = False
+    construction_outstanding_reviewed_empty: bool = False
     submitted_at: str | None = None
 
     @property
@@ -274,14 +315,23 @@ class ShiftReport:
             "shift_id": self.shift_id,
             "supervisor_principal_id": self.supervisor_principal_id,
             "crew_id": self.crew_id,
+            "crew_ids": list(self.crew_ids),
+            "reporting_model": self.reporting_model,
             "status": self.status,
             "attendance": [item.as_dict() for item in self.attendance],
             "stop_fix": [item.as_dict() for item in self.stop_fix],
             "cards": [item.as_dict() for item in self.cards],
             "machine_events": [item.as_dict() for item in self.machine_events],
+            "construction_work": [item.as_dict() for item in self.construction_work],
             "other_activities": [item.as_dict() for item in self.other_activities],
             "created_at": self.created_at,
             "updated_at": self.updated_at,
+            "brothers_keeper": self.brothers_keeper,
+            "safety_reviewed_empty": self.safety_reviewed_empty,
+            "machine_activity_reviewed_empty": self.machine_activity_reviewed_empty,
+            "other_activities_reviewed_empty": self.other_activities_reviewed_empty,
+            "construction_work_reviewed_empty": self.construction_work_reviewed_empty,
+            "construction_outstanding_reviewed_empty": self.construction_outstanding_reviewed_empty,
             "submitted_at": self.submitted_at,
         }
 

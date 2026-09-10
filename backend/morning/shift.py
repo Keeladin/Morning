@@ -25,64 +25,71 @@ def _parse_hhmm(value: str, *, field: str) -> time:
         raise ShiftError(f"{field} must be an HH:MM time") from exc
 
 
-def _boundaries(policy: ShiftPolicy) -> tuple[time, time]:
-    day_start = _parse_hhmm(policy.day_shift_start, field="day_shift_start")
-    night_start = _parse_hhmm(policy.night_shift_start, field="night_shift_start")
-    if day_start == night_start:
-        raise ShiftError("day_shift_start and night_shift_start must differ")
-    return day_start, night_start
+def _boundaries(policy: ShiftPolicy) -> tuple[time, time, time]:
+    morning = _parse_hhmm(policy.morning_shift_start, field="morning_shift_start")
+    afternoon = _parse_hhmm(policy.afternoon_shift_start, field="afternoon_shift_start")
+    night = _parse_hhmm(policy.night_shift_start, field="night_shift_start")
+    if len({morning, afternoon, night}) != 3:
+        raise ShiftError("morning, afternoon and night shift starts must all differ")
+    if not (morning < afternoon < night):
+        raise ShiftError("shift starts must be ordered morning < afternoon < night")
+    return morning, afternoon, night
 
 
 def shift_window(policy: ShiftPolicy, identity: ShiftIdentity) -> tuple[datetime, datetime]:
-    """Return the [start, end) instant boundaries of one configured shift."""
-
+    """Return the [start, end) boundaries for one three-shift reporting slot."""
     zone = require_zone(policy.timezone)
-    day_start, night_start = _boundaries(policy)
-    shift_date = date.fromisoformat(identity.shift_date)
-
-    start_time, end_time = (day_start, night_start) if identity.shift_kind == "day" else (night_start, day_start)
-    start = datetime.combine(shift_date, start_time, tzinfo=zone)
-    end_date = shift_date + timedelta(days=1) if end_time <= start_time else shift_date
-    end = datetime.combine(end_date, end_time, tzinfo=zone)
-    return start, end
+    morning, afternoon, night = _boundaries(policy)
+    reporting_date = date.fromisoformat(identity.shift_date)
+    if identity.shift_kind == "morning":
+        start_date, start_time, end_date, end_time = reporting_date, morning, reporting_date, afternoon
+    elif identity.shift_kind == "afternoon":
+        start_date, start_time, end_date, end_time = reporting_date, afternoon, reporting_date, night
+    elif identity.shift_kind == "night":
+        # Night belongs to the calendar day on which it finishes.
+        start_date, start_time = reporting_date - timedelta(days=1), night
+        end_date, end_time = reporting_date, morning
+    else:
+        raise ShiftError(f"unsupported shift kind: {identity.shift_kind}")
+    return (
+        datetime.combine(start_date, start_time, tzinfo=zone),
+        datetime.combine(end_date, end_time, tzinfo=zone),
+    )
 
 
 def resolve_shift(policy: ShiftPolicy, *, at: datetime) -> ShiftIdentity:
-    """Resolve an instant to the configured shift without manual inference."""
-
+    """Resolve an instant to Morning, Afternoon or Night shift automatically."""
     zone = require_zone(policy.timezone)
-    _boundaries(policy)
+    morning, afternoon, night = _boundaries(policy)
     local = at.astimezone(zone) if at.tzinfo is not None else at.replace(tzinfo=zone)
-
-    for days_back in (1, 0):
-        candidate_date = (local.date() - timedelta(days=days_back)).isoformat()
-        for kind in ("day", "night"):
-            identity = ShiftIdentity(shift_date=candidate_date, shift_kind=kind)
-            start, end = shift_window(policy, identity)
-            if start <= local < end:
-                return identity
-    raise ShiftError("could not resolve a shift for the given time")
+    clock = local.timetz().replace(tzinfo=None)
+    if morning <= clock < afternoon:
+        kind, reporting_date = "morning", local.date()
+    elif afternoon <= clock < night:
+        kind, reporting_date = "afternoon", local.date()
+    elif clock >= night:
+        kind, reporting_date = "night", local.date() + timedelta(days=1)
+    else:
+        kind, reporting_date = "night", local.date()
+    return ShiftIdentity(shift_date=reporting_date.isoformat(), shift_kind=kind)
 
 
 def anchor_time_to_shift(policy: ShiftPolicy, identity: ShiftIdentity, hhmm: str) -> datetime:
-    """Anchor a bare HH:MM value to its correct date inside a shift."""
-
+    """Anchor a bare HH:MM value to its calendar date inside the selected shift."""
     zone = require_zone(policy.timezone)
     clock = _parse_hhmm(hhmm, field="time")
     start, _end = shift_window(policy, identity)
-    shift_date = date.fromisoformat(identity.shift_date)
-    candidate = datetime.combine(shift_date, clock, tzinfo=zone)
+    candidate = datetime.combine(start.date(), clock, tzinfo=zone)
     if candidate < start:
         candidate += timedelta(days=1)
     return candidate
 
 
 def reporting_window(policy: ShiftPolicy, reporting_date: str) -> tuple[datetime, datetime]:
-    """Return the 24h reporting window from one day-shift start to the next."""
-
+    """Return the 24h reporting day: prior Night start through current Night start."""
     zone = require_zone(policy.timezone)
-    day_start, _night_start = _boundaries(policy)
-    start_date = date.fromisoformat(reporting_date)
-    start = datetime.combine(start_date, day_start, tzinfo=zone)
-    end = datetime.combine(start_date + timedelta(days=1), day_start, tzinfo=zone)
+    _morning, _afternoon, night = _boundaries(policy)
+    report_date = date.fromisoformat(reporting_date)
+    start = datetime.combine(report_date - timedelta(days=1), night, tzinfo=zone)
+    end = datetime.combine(report_date, night, tzinfo=zone)
     return start, end

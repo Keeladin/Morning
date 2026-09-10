@@ -30,7 +30,7 @@ def accounts() -> MorningAccounts:
     database_url = os.environ["MORNING_DATABASE_URL"]
     engine = create_database_engine(database_url)
     with engine.begin() as connection:
-        connection.execute(text("TRUNCATE TABLE morning_principals, morning_crews, morning_machines CASCADE"))
+        connection.execute(text("TRUNCATE TABLE morning_construction_levels, morning_construction_workstreams, morning_principals, morning_crews, morning_machines CASCADE"))
     engine.dispose()
     return MorningAccounts(MorningStore(database_url))
 
@@ -46,6 +46,16 @@ def test_duplicate_username_is_rejected_case_insensitively(accounts: MorningAcco
     accounts.register(username="lyle", password="correct-horse", display_name="Lyle")
     with pytest.raises(AccountError):
         accounts.register(username="Lyle", password="another-password", display_name="Someone Else")
+
+
+def test_duplicate_supervisor_name_is_rejected_even_with_a_different_username(accounts: MorningAccounts) -> None:
+    accounts.register(username="jurie-first", password="correct-horse", display_name="Jurie Venter")
+    with pytest.raises(AccountError, match="already registered for this full name"):
+        accounts.register(
+            username="jurie-second",
+            password="another-password",
+            display_name="  jurie venter  ",
+        )
 
 
 def test_short_password_is_rejected(accounts: MorningAccounts) -> None:

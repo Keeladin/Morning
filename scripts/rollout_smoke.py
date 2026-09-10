@@ -122,9 +122,11 @@ def submit_shift(
             expected=(201,),
         )
 
-    start_hhmm, end_hhmm, state_hhmm = (
-        ("07:00", "08:00", "17:30") if shift_kind == "day" else ("19:00", "20:00", "05:30")
-    )
+    start_hhmm, end_hhmm, state_hhmm = {
+        "morning": ("07:00", "08:00", "13:30"),
+        "afternoon": ("15:00", "16:00", "21:30"),
+        "night": ("23:00", "23:30", "05:30"),
+    }[shift_kind]
     api(
         client,
         "POST",
@@ -135,6 +137,7 @@ def submit_shift(
             "start_hhmm": start_hhmm,
             "end_hhmm": end_hhmm,
             "issue": "Smoke test engineering activity",
+            "person_id": person_id,
         },
         expected=(201,),
     )
@@ -161,6 +164,15 @@ def submit_shift(
             payload={"category": "Inspections", "description": "Rollout smoke inspection completed"},
             expected=(201,),
         )
+    else:
+        for section in ("safety", "other_activities"):
+            api(
+                client,
+                "PATCH",
+                f"/api/morning/reports/{report_id}/section-resolution",
+                csrf=csrf,
+                payload={"section": section, "reviewed": True},
+            )
 
     submitted = api(
         client,
@@ -264,14 +276,23 @@ def main() -> int:
 
             suggestion = api(supervisor, "GET", "/api/morning/shift")
             shift_date = suggestion["shift_date"]
-            day_report = submit_shift(
+            morning_report = submit_shift(
                 supervisor,
                 csrf=supervisor_csrf,
                 shift_date=shift_date,
-                shift_kind="day",
+                shift_kind="morning",
                 person_id=person["id"],
                 machine_id=machine["id"],
                 with_detail=True,
+            )
+            afternoon_report = submit_shift(
+                supervisor,
+                csrf=supervisor_csrf,
+                shift_date=shift_date,
+                shift_kind="afternoon",
+                person_id=person["id"],
+                machine_id=machine["id"],
+                with_detail=False,
             )
             night_report = submit_shift(
                 supervisor,
@@ -319,7 +340,8 @@ def main() -> int:
                 "status": "ok",
                 "base_url": BASE_URL,
                 "shift_date": shift_date,
-                "day_report": day_report,
+                "morning_report": morning_report,
+                "afternoon_report": afternoon_report,
                 "night_report": night_report,
                 "teams_duration_cell": cells["L114"],
             },
