@@ -39,7 +39,7 @@ export type OtherActivity = { id: string; category: string | null; description: 
 export type ShiftReport = {
   id: string; shift_date: string; shift_kind: ShiftKind; shift_id: string; supervisor_principal_id: string
   crew_id: string | null; crew_ids: string[]; reporting_model: ReportingModel; status: 'draft' | 'submitted' | 'abandoned'; attendance: AttendanceEntry[]
-  stop_fix: StopFixRecord[]; cards: CardObservation[]; machine_events: MachineEvent[]
+  stop_fix: StopFixRecord[]; cards: CardObservation[]; machine_events: MachineEvent[]; machine_states?: MachineStateDeclaration[]
   construction_work: ConstructionWorkItem[]; other_activities: OtherActivity[]; created_at: string; updated_at: string; submitted_at: string | null
   brothers_keeper: string | null
   safety_reviewed_empty: boolean; machine_activity_reviewed_empty: boolean; other_activities_reviewed_empty: boolean

@@ -385,6 +385,10 @@ def test_offline_snapshot_sync_is_idempotent(client: TestClient) -> None:
             "id": "offline_event_1", "machine_id": machine["id"], "start_time": "08:20", "end_time": "08:45",
             "issue": "Hydraulic hose", "person_id": person["id"],
         }],
+        "machine_states": [{
+            "id": "offline_state_1", "machine_id": machine["id"], "declared_at": "08:45",
+            "state": "not_tested", "state_note": None, "follow_up": "Test before production",
+        }],
         "construction_work": [], "other_activities": [],
         "brothers_keeper": "Improve access lighting.",
         "safety_reviewed_empty": False, "machine_activity_reviewed_empty": False,
@@ -397,6 +401,9 @@ def test_offline_snapshot_sync_is_idempotent(client: TestClient) -> None:
     assert body["status"] == "submitted"
     assert len(body["stop_fix"]) == 1
     assert len(body["machine_events"]) == 1
+    states = browser.get(f"/api/morning/reports/{body['id']}/machine-states")
+    assert states.status_code == 200, states.text
+    assert [(item["id"], item["state"]) for item in states.json()["states"]] == [("offline_state_1", "not_tested")]
 
     second = browser.post("/api/morning/offline-sync", json={"report": snapshot, "submit": True}, headers=headers)
     assert second.status_code == 200, second.text
@@ -404,6 +411,8 @@ def test_offline_snapshot_sync_is_idempotent(client: TestClient) -> None:
     assert repeated["id"] == body["id"]
     assert len(repeated["stop_fix"]) == 1
     assert len(repeated["machine_events"]) == 1
+    repeated_states = browser.get(f"/api/morning/reports/{body['id']}/machine-states").json()["states"]
+    assert [item["id"] for item in repeated_states] == ["offline_state_1"]
 
 
 def test_tmm_home_messages_notice_board_and_department_personnel_pool(client: TestClient) -> None:
@@ -501,6 +510,91 @@ def test_tmm_multicrew_selection_combines_roster(client: TestClient) -> None:
     roster = browser.get(f"/api/morning/roster?report_id={body['id']}")
     assert roster.status_code == 200, roster.text
     assert {item["id"] for item in roster.json()["people"]} == {person_a["id"], person_b["id"]}
+
+    attendance = browser.post(
+        f"/api/morning/reports/{body['id']}/attendance",
+        json={"entries": [
+            {"person_id": person_a["id"], "present": True},
+            {"person_id": person_b["id"], "present": True},
+        ]},
+        headers=headers,
+    )
+    assert attendance.status_code == 200, attendance.text
+    assert browser.put(
+        f"/api/morning/reports/{body['id']}/brothers-keeper",
+        json={"contribution": "Keep access routes clear."}, headers=headers,
+    ).status_code == 200
+    for section in ("safety", "machine_activity", "other_activities"):
+        reviewed = browser.patch(
+            f"/api/morning/reports/{body['id']}/section-resolution",
+            json={"section": section, "reviewed": True}, headers=headers,
+        )
+        assert reviewed.status_code == 200, reviewed.text
+    submitted = browser.post(f"/api/morning/reports/{body['id']}/submit", headers=headers)
+    assert submitted.status_code == 200, submitted.text
+    assert submitted.json()["status"] == "submitted"
+
+
+def test_existing_draft_rejects_changed_crew_selection(client: TestClient) -> None:
+    admin = _admin(client)
+    admin_headers = {"X-CSRF-Token": admin["csrf_token"]}
+    crew_a = client.post("/api/morning/admin/crews", json={"name": "Crew A"}, headers=admin_headers).json()
+    crew_b = client.post("/api/morning/admin/crews", json={"name": "Crew B"}, headers=admin_headers).json()
+    _supervisor(client, admin_headers)
+    browser = TestClient(client.app)
+    login = browser.post("/api/morning/auth/login", json={"username": "jurie", "password": "correct-horse"}).json()
+    headers = {"X-CSRF-Token": login["csrf_token"]}
+    first = browser.post(
+        "/api/morning/draft",
+        json={"shift_date": "2026-09-10", "shift_kind": "morning", "crew_ids": [crew_a["id"]]},
+        headers=headers,
+    )
+    assert first.status_code == 201, first.text
+    changed = browser.post(
+        "/api/morning/draft",
+        json={"shift_date": "2026-09-10", "shift_kind": "morning", "crew_ids": [crew_b["id"]]},
+        headers=headers,
+    )
+    assert changed.status_code == 400
+    assert "different crew selection" in changed.json()["error"]
+    current = browser.get("/api/morning/draft?reporting_model=tmm").json()["report"]
+    assert current["crew_ids"] == [crew_a["id"]]
+
+
+def test_suspension_revokes_existing_session_and_logout_clears_cookie(client: TestClient) -> None:
+    admin = _admin(client)
+    admin_headers = {"X-CSRF-Token": admin["csrf_token"]}
+    crew = client.post("/api/morning/admin/crews", json={"name": "Crew A"}, headers=admin_headers).json()
+    _supervisor(client, admin_headers)
+    browser = TestClient(client.app)
+    login = browser.post("/api/morning/auth/login", json={"username": "jurie", "password": "correct-horse"})
+    assert login.status_code == 200, login.text
+    payload = login.json()
+    headers = {"X-CSRF-Token": payload["csrf_token"]}
+    principal_id = payload["principal"]["principal_id"]
+    report = browser.post(
+        "/api/morning/draft",
+        json={"shift_date": "2026-09-10", "shift_kind": "morning", "crew_ids": [crew["id"]]},
+        headers=headers,
+    )
+    assert report.status_code == 201, report.text
+    report_id = report.json()["id"]
+    assert browser.get("/api/morning/me").status_code == 200
+
+    suspended = client.post(f"/api/morning/admin/accounts/{principal_id}/deactivate", headers=admin_headers)
+    assert suspended.status_code == 200, suspended.text
+    assert browser.get("/api/morning/me").status_code == 401
+    blocked = browser.put(
+        f"/api/morning/reports/{report_id}/brothers-keeper",
+        json={"contribution": "This must not save."}, headers=headers,
+    )
+    assert blocked.status_code == 401
+
+    logout = browser.post("/api/morning/auth/logout", headers=headers)
+    assert logout.status_code == 200, logout.text
+    session = browser.get("/api/morning/auth/session")
+    assert session.status_code == 200
+    assert session.json() == {"authenticated": False}
 
 
 def test_crew_delete_blocks_referenced_and_removes_unused(client: TestClient) -> None:

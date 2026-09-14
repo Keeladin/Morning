@@ -67,6 +67,7 @@ describe('approved mobile controls', () => {
     expect(screen.getByLabelText('Start time')).toHaveAttribute('type', 'time')
     expect(screen.getByLabelText('End time')).toHaveAttribute('type', 'time')
     expect(screen.getByLabelText('Person assigned')).toHaveValue('p1')
-    expect(screen.queryByText('How was the machine left?')).not.toBeInTheDocument()
+    expect(screen.getByText('How was the machine left?')).toBeVisible()
+    expect(screen.getByLabelText('Machine state')).toBeVisible()
   })
 })

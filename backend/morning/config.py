@@ -9,6 +9,14 @@ class ConfigError(RuntimeError):
     """Raised when deployment configuration is invalid or incomplete."""
 
 
+_PLACEHOLDER_MARKERS = ("replace-with", "replace_me", "change-me", "changeme", "placeholder")
+
+
+def _looks_placeholder(value: str) -> bool:
+    lowered = value.strip().casefold()
+    return any(marker in lowered for marker in _PLACEHOLDER_MARKERS)
+
+
 @dataclass(frozen=True)
 class Settings:
     environment: str
@@ -37,6 +45,13 @@ class Settings:
                 missing.append("MORNING_SESSION_SECRET")
             if missing:
                 raise ConfigError(f"missing required production configuration: {', '.join(missing)}")
+            assert database_url is not None and session_secret is not None
+            if _looks_placeholder(database_url):
+                raise ConfigError("MORNING_DATABASE_URL contains placeholder credentials")
+            if len(session_secret) < 32:
+                raise ConfigError("MORNING_SESSION_SECRET must be at least 32 characters in production")
+            if _looks_placeholder(session_secret):
+                raise ConfigError("MORNING_SESSION_SECRET must not use placeholder material")
 
         return cls(
             environment=environment,
