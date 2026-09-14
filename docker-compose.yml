@@ -37,6 +37,25 @@ services:
       retries: 30
       start_period: 2s
 
+
+  atlas-export:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    restart: unless-stopped
+    command: ["morning", "atlas-export-runner"]
+    environment:
+      MORNING_ENV: ${MORNING_ENV:-development}
+      MORNING_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-morning}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-morning}
+      MORNING_SESSION_SECRET: ${MORNING_SESSION_SECRET:?set MORNING_SESSION_SECRET in .env}
+      MORNING_ATLAS_EXPORT_DIR: /exports
+      MORNING_ATLAS_EXPORT_LOOKBACK_WEEKS: ${MORNING_ATLAS_EXPORT_LOOKBACK_WEEKS:-4}
+      MORNING_ATLAS_EXPORT_POLL_SECONDS: ${MORNING_ATLAS_EXPORT_POLL_SECONDS:-900}
+    volumes:
+      - ${MORNING_ATLAS_EXPORT_HOST_DIR:-/home/jaco/Workspace/Morning/Atlas}:/exports
+    depends_on:
+      api:
+        condition: service_healthy
   web:
     build:
       context: .
