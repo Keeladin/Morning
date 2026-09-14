@@ -107,6 +107,11 @@ def require_session(request: Request) -> SessionData | JSONResponse:
     session = service.session_from_request(request)
     if session is None:
         return unauthorized()
+    accounts: MorningAccounts = request.app.state.morning_accounts
+    try:
+        accounts.principal_for(session.principal_id)
+    except AccountError:
+        return unauthorized("account is not active")
     return session
 
 

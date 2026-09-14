@@ -7,7 +7,6 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 from ..accounts import AccountError, PendingApprovalError
-from ..auth import require_mutation_auth
 from ..store import MorningError
 
 
@@ -74,11 +73,12 @@ async def login(request: Request) -> JSONResponse:
 
 
 async def logout(request: Request) -> JSONResponse:
-    gate = require_mutation_auth(request)
-    if isinstance(gate, JSONResponse):
-        return gate
+    service = request.app.state.morning_auth
+    current = service.session_from_request(request)
+    if current is not None and not service.csrf_ok(request, current):
+        return JSONResponse({"error": "csrf token missing or invalid"}, status_code=403)
     response = JSONResponse({})
-    request.app.state.morning_auth.clear_session_cookie(response)
+    service.clear_session_cookie(response)
     return response
 
 

@@ -1,6 +1,6 @@
 import {
-  applyOfflineReportMutation, cacheOfflineData, cacheOfflineSession, clearOfflineDraft, clearOfflineSession,
-  getOfflineData, getOfflineSession, isOfflineReportPending, loadOfflineDraft, pendingOfflineDrafts,
+  addOfflineMachineState, applyOfflineReportMutation, cacheOfflineData, cacheOfflineSession, clearOfflineDraft, clearOfflineSession,
+  getOfflineData, getOfflineSession, isOfflineReportPending, loadOfflineDraft, offlineDraftById, pendingOfflineDrafts,
   saveOfflineDraft, setOfflinePrincipal, demoWhatsappText,
 } from './offline'
 import type { ReportingModel, ShiftReport } from './types'
@@ -53,13 +53,10 @@ function cachedGet<T>(path: string): T | null {
   if (path === '/api/morning/construction/config') return getOfflineData<T>('construction-config')
   if (path === '/api/morning/roster' || path.startsWith('/api/morning/roster?') || path.includes('/participants')) return getOfflineData<T>('roster')
   if (path.startsWith('/api/morning/draft?')) return { report: loadOfflineDraft(reportingModel(path))?.report || null } as T
+  const stateMatch = path.match(/^\/api\/morning\/reports\/([^/]+)\/machine-states$/)
+  if (stateMatch) return { states: offlineDraftById(stateMatch[1])?.report.machine_states || [] } as T
   const reportMatch = path.match(/^\/api\/morning\/reports\/([^/]+)$/)
-  if (reportMatch) {
-    for (const model of ['tmm', 'construction'] as ReportingModel[]) {
-      const draft = loadOfflineDraft(model)
-      if (draft?.report.id === reportMatch[1]) return draft.report as T
-    }
-  }
+  if (reportMatch) return offlineDraftById(reportMatch[1])?.report as T || null
   return null
 }
 
@@ -89,7 +86,7 @@ function cacheSuccess(path: string, body: unknown): unknown {
     const local = loadOfflineDraft(model)
     if (local?.pending) { scheduleOfflineSync(); return { report: local.report } }
     const report = (body as { report?: ShiftReport | null } | null)?.report
-    if (report) saveOfflineDraft(report, false); else clearOfflineDraft(model)
+    if (report) saveOfflineDraft(report, false, true); else clearOfflineDraft(model)
   } else if (looksLikeReport(body)) saveOfflineDraft(body, false)
   return body
 }
@@ -104,7 +101,7 @@ async function sendSnapshot(report: ShiftReport): Promise<ShiftReport> {
   const body = await responseBody(response)
   if (!response.ok) throw apiError(response, body)
   if (!looksLikeReport(body)) throw new Error('Morning returned an invalid synchronization response.')
-  const synced = { ...body, offline_submit_pending: undefined }
+  const synced = { ...body, machine_states: report.machine_states || [], offline_submit_pending: undefined }
   saveOfflineDraft(synced, false)
   window.dispatchEvent(new CustomEvent('morning:report-synced', { detail: { report: synced } }))
   return synced
@@ -148,6 +145,16 @@ export async function morningApi<T = unknown>(path: string, init: RequestInit = 
   if (!headers.has('Content-Type') && init.body) headers.set('Content-Type', 'application/json')
   const method = (init.method || 'GET').toUpperCase()
   if (method !== 'GET' && method !== 'HEAD' && csrfToken) headers.set('X-CSRF-Token', csrfToken)
+  const statePost = path.match(/^\/api\/morning\/reports\/([^/]+)\/machine-states$/)
+  const offlineState = () => {
+    const payload = init.body && typeof init.body === 'string' ? JSON.parse(init.body) as Record<string, unknown> : {}
+    const declaration = addOfflineMachineState(statePost![1], payload, !demoMode)
+    const draft = offlineDraftById(statePost![1])
+    if (!demoMode && draft) queueBackgroundSnapshot(draft.report)
+    return declaration as T
+  }
+
+  if (statePost && method === 'POST' && (demoMode || !navigator.onLine)) return offlineState()
 
   if (demoMode && (path === '/api/morning/draft' || path.startsWith('/api/morning/draft?') || path.startsWith('/api/morning/reports/'))) {
     if (method === 'GET' || method === 'HEAD') {
@@ -178,6 +185,8 @@ export async function morningApi<T = unknown>(path: string, init: RequestInit = 
   catch (networkError) {
     if (method === 'GET' || method === 'HEAD') {
       const cached = cachedGet<T>(path); if (cached !== null) return cached
+    } else if (statePost && method === 'POST') {
+      return offlineState()
     } else if (path === '/api/morning/draft' || path.startsWith('/api/morning/reports/')) {
       const local = applyOfflineReportMutation(path, init)
       queueBackgroundSnapshot(local)

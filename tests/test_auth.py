@@ -23,6 +23,13 @@ def _client() -> tuple[TestClient, MorningSessionService]:
     )
     app = Starlette(routes=[Route("/mutate", mutate, methods=["POST"])])
     app.state.morning_auth = service
+
+    class ActiveAccounts:
+        @staticmethod
+        def principal_for(principal_id: str):
+            return {"id": principal_id, "status": "active"}
+
+    app.state.morning_accounts = ActiveAccounts()
     return TestClient(app), service
 
 

@@ -1,5 +1,5 @@
 import type {
-  AttendanceEntry, CardObservation, ConstructionWorkItem, OtherActivity, ReportingModel,
+  AttendanceEntry, CardObservation, ConstructionWorkItem, MachineStateDeclaration, OtherActivity, ReportingModel,
   ShiftKind, ShiftReport, StopFixRecord, SupervisorContext,
 } from './types'
 
@@ -45,26 +45,65 @@ export function getOfflineData<T>(name: string): T | null {
   const key = scopedKey(name); return key ? readJson<T>(key) : null
 }
 
-export function loadOfflineDraft(model: ReportingModel): OfflineDraft | null {
-  return getOfflineData<OfflineDraft>(`draft.${model}`)
+function draftRecordName(reportId: string): string { return `draft.id.${reportId}` }
+function currentDraftName(model: ReportingModel): string { return `draft.current.${model}` }
+
+function removeOfflineData(name: string): void {
+  const key = scopedKey(name); if (key) try { localStorage.removeItem(key) } catch { /* ignore */ }
 }
-export function saveOfflineDraft(report: ShiftReport, pending: boolean): ShiftReport {
-  cacheOfflineData(`draft.${report.reporting_model}`, { report, pending } satisfies OfflineDraft)
+
+export function loadOfflineDraft(model: ReportingModel): OfflineDraft | null {
+  const currentId = getOfflineData<string>(currentDraftName(model))
+  if (currentId) {
+    const current = getOfflineData<OfflineDraft>(draftRecordName(currentId))
+    if (current) return current
+  }
+  // One-time compatibility with the original single-draft-per-model cache.
+  const legacy = getOfflineData<OfflineDraft>(`draft.${model}`)
+  if (legacy) {
+    saveOfflineDraft(legacy.report, legacy.pending, true)
+    removeOfflineData(`draft.${model}`)
+  }
+  return legacy
+}
+export function saveOfflineDraft(report: ShiftReport, pending: boolean, makeCurrent = false): ShiftReport {
+  cacheOfflineData(draftRecordName(report.id), { report, pending } satisfies OfflineDraft)
+  if (makeCurrent) cacheOfflineData(currentDraftName(report.reporting_model), report.id)
   return report
 }
 export function clearOfflineDraft(model: ReportingModel): void {
-  const key = scopedKey(`draft.${model}`); if (key) try { localStorage.removeItem(key) } catch { /* ignore */ }
+  const currentId = getOfflineData<string>(currentDraftName(model))
+  if (currentId) removeOfflineData(draftRecordName(currentId))
+  removeOfflineData(currentDraftName(model))
+  removeOfflineData(`draft.${model}`)
 }
 export function offlineDraftById(reportId: string): OfflineDraft | null {
+  const direct = getOfflineData<OfflineDraft>(draftRecordName(reportId))
+  if (direct) return direct
   for (const model of ['tmm', 'construction'] as ReportingModel[]) {
-    const draft = loadOfflineDraft(model)
-    if (draft?.report.id === reportId) return draft
+    const legacy = getOfflineData<OfflineDraft>(`draft.${model}`)
+    if (legacy?.report.id === reportId) return legacy
   }
   return null
 }
 export function pendingOfflineDrafts(): OfflineDraft[] {
-  return (['tmm', 'construction'] as ReportingModel[])
-    .map(loadOfflineDraft).filter((item): item is OfflineDraft => Boolean(item?.pending))
+  const principal = getOfflinePrincipal()
+  if (!principal) return []
+  const prefix = `${ROOT}.${principal}.draft.id.`
+  const found = new Map<string, OfflineDraft>()
+  try {
+    for (let index = 0; index < localStorage.length; index += 1) {
+      const key = localStorage.key(index)
+      if (!key?.startsWith(prefix)) continue
+      const item = readJson<OfflineDraft>(key)
+      if (item?.pending) found.set(item.report.id, item)
+    }
+  } catch { /* ignore */ }
+  for (const model of ['tmm', 'construction'] as ReportingModel[]) {
+    const legacy = getOfflineData<OfflineDraft>(`draft.${model}`)
+    if (legacy?.pending) found.set(legacy.report.id, legacy)
+  }
+  return [...found.values()]
 }
 export function isOfflineReportPending(reportId: string): boolean { return Boolean(offlineDraftById(reportId)?.pending) }
 
@@ -75,7 +114,7 @@ function emptyReport(
   return {
     id: localId('report'), shift_date: shiftDate, shift_kind: shiftKind, shift_id: `${shiftDate}:${shiftKind}`,
     supervisor_principal_id: supervisor.principal_id, crew_id: crewIds[0] || supervisor.crew_id, crew_ids: crewIds, reporting_model: reportingModel,
-    status: 'draft', attendance: [], stop_fix: [], cards: [], machine_events: [], construction_work: [], other_activities: [], brothers_keeper: null,
+    status: 'draft', attendance: [], stop_fix: [], cards: [], machine_events: [], machine_states: [], construction_work: [], other_activities: [], brothers_keeper: null,
     created_at: now, updated_at: now, submitted_at: null, safety_reviewed_empty: false,
     machine_activity_reviewed_empty: false, other_activities_reviewed_empty: false,
     construction_work_reviewed_empty: false, construction_outstanding_reviewed_empty: false,
@@ -95,10 +134,28 @@ export function createOfflineReport(body: Record<string, unknown>): ShiftReport 
   if (!/^\d{4}-\d{2}-\d{2}$/.test(shiftDate) || !['morning', 'afternoon', 'night'].includes(shiftKind)) {
     throw new Error('No cached shift is available. Connect once before starting a report offline.')
   }
-  return saveOfflineDraft(emptyReport(supervisor, shiftDate, shiftKind, reportingModel, selectedCrewIds), true)
+  return saveOfflineDraft(emptyReport(supervisor, shiftDate, shiftKind, reportingModel, selectedCrewIds), true, true)
 }
 
 function touch(report: ShiftReport): ShiftReport { return { ...report, updated_at: new Date().toISOString() } }
+
+export function addOfflineMachineState(reportId: string, payload: Record<string, unknown>, pending = true): MachineStateDeclaration {
+  const state = offlineDraftById(reportId)
+  if (!state) throw new Error('No local copy of this report is available.')
+  const value = String(payload.state || '') as MachineStateDeclaration['state']
+  const declaredAt = String(payload.declared_hhmm || '')
+  const note = String(payload.state_note || '').trim() || null
+  if (!String(payload.machine_id || '') || !/^([01]\d|2[0-3]):[0-5]\d$/.test(declaredAt)) throw new Error('Machine and a valid declaration time are required.')
+  if (!['running', 'not_tested', 'under_repair', 'awaiting_parts', 'other'].includes(value)) throw new Error('Select a valid machine state.')
+  if (value === 'other' && !note) throw new Error('Other machine state requires an explanatory note.')
+  const declaration: MachineStateDeclaration = {
+    id: localId('state'), machine_id: String(payload.machine_id), report_id: reportId, declared_at: declaredAt, state: value,
+    provenance: 'declared', state_note: note, source_state_id: null, follow_up: String(payload.follow_up || '').trim() || null, created_at: new Date().toISOString(),
+  }
+  const report = touch({ ...state.report, machine_states: [...(state.report.machine_states || []), declaration] })
+  saveOfflineDraft(report, pending)
+  return declaration
+}
 function jsonBody(body: BodyInit | null | undefined): Record<string, any> {
   if (!body || typeof body !== 'string') return {}
   try { return JSON.parse(body) as Record<string, any> } catch { return {} }

@@ -76,9 +76,7 @@ class MorningRuntime:
         return self.store.roster_for_crew(crew_id)
 
     def expected_attendance_for_report(self, report: ShiftReport) -> tuple[Person, ...]:
-        if report.reporting_model == "tmm":
-            return self.store.roster_for_crews(report.crew_ids)
-        return self.expected_attendance(report.crew_id)
+        return self.store.roster_for_report(report)
 
     def tmm_personnel(self) -> tuple[Person, ...]:
         return self.store.list_tmm_persons(active_only=True)
@@ -225,6 +223,32 @@ class MorningRuntime:
             construction_outstanding_reviewed_empty=bool(snapshot.get("construction_outstanding_reviewed_empty"))
                 and not any(item.kind == "outstanding" for item in construction_work),
         )
+
+        existing_state_ids = {item.id for item in self.store.list_machine_states(report_id=report.id)}
+        for raw in snapshot.get("machine_states") or []:
+            raw = raw or {}
+            declaration_id = str(raw.get("id") or new_id("state"))
+            if declaration_id in existing_state_ids:
+                continue
+            state = str(raw.get("state") or "")
+            if state not in MACHINE_STATES:
+                raise MorningError(f"unsupported machine state: {state}")
+            state_note = str(raw.get("state_note") or "").strip() or None
+            if state == "other" and not state_note:
+                raise MorningError("other machine state requires an explanatory note")
+            declared_hhmm = self._snapshot_hhmm(raw.get("declared_at") or raw.get("declared_hhmm"))
+            declared_at = anchor_time_to_shift(
+                self.shift_policy(),
+                ShiftIdentity(shift_date=report.shift_date, shift_kind=report.shift_kind),
+                declared_hhmm,
+            ).isoformat()
+            self.store.add_machine_state(MachineStateDeclaration(
+                id=declaration_id, machine_id=str(raw.get("machine_id") or ""), report_id=report.id,
+                declared_at=declared_at, state=state, provenance="declared", state_note=state_note,
+                follow_up=(str(raw.get("follow_up") or "").strip() or None),
+            ))
+            existing_state_ids.add(declaration_id)
+
         return self.store.submit_report(report.id) if submit else report
 
     def abandon_draft(self, report_id: str) -> ShiftReport:

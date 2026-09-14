@@ -713,6 +713,29 @@ class MorningStore:
         return tuple(self._person_from_row(row) for row in rows)
 
     @staticmethod
+    def _report_crew_ids(
+        db: Connection[dict[str, Any]], report_id: str, fallback_crew_id: str | None
+    ) -> tuple[str, ...]:
+        rows = db.execute(
+            "SELECT crew_id FROM morning_report_crews WHERE report_id=%s ORDER BY position, crew_id",
+            (report_id,),
+        ).fetchall()
+        if rows:
+            return tuple(row["crew_id"] for row in rows)
+        return (fallback_crew_id,) if fallback_crew_id else ()
+
+    def roster_for_report(self, report: ShiftReport) -> tuple[Person, ...]:
+        with self._db() as db:
+            crew_ids = self._report_crew_ids(db, report.id, report.crew_id)
+            if not crew_ids:
+                return ()
+            rows = db.execute(
+                "SELECT * FROM morning_persons WHERE active=true AND crew_id = ANY(%s) ORDER BY name",
+                (list(crew_ids),),
+            ).fetchall()
+        return tuple(self._person_from_row(row) for row in rows)
+
+    @staticmethod
     def _person_from_row(row: dict[str, Any]) -> Person:
         return Person(
             id=row["id"],
@@ -904,11 +927,14 @@ class MorningStore:
                     (shift_date, shift_kind, supervisor_principal_id, reporting_model),
                 ).fetchone()
                 if row is not None:
-                    existing = db.execute(
-                        "SELECT crew_id FROM morning_report_crews WHERE report_id=%s ORDER BY position, crew_id",
-                        (row["id"],),
-                    ).fetchall()
-                    if not existing and crew_ids:
+                    existing_ids = self._report_crew_ids(db, row["id"], crew_id)
+                    requested_ids = tuple(crew_ids) or ((crew_id,) if crew_id else ())
+                    report_exists = row["id"] != row_id
+                    if report_exists and requested_ids and existing_ids != requested_ids:
+                        raise MorningError(
+                            "an existing draft already owns a different crew selection; continue that draft or abandon it first"
+                        )
+                    if not report_exists and crew_ids:
                         with db.cursor() as cursor:
                             cursor.executemany(
                                 "INSERT INTO morning_report_crews (report_id, crew_id, position) VALUES (%s, %s, %s)",
@@ -1275,18 +1301,11 @@ class MorningStore:
                     "SELECT person_id FROM morning_attendance WHERE report_id=%s", (report_id,)
                 ).fetchall()
             }
-            crew_ids = [
-                row["crew_id"] for row in db.execute(
-                    "SELECT crew_id FROM morning_report_crews WHERE report_id=%s ORDER BY position, crew_id",
-                    (report_id,),
-                ).fetchall()
-            ]
-            if not crew_ids and report["crew_id"]:
-                crew_ids = [report["crew_id"]]
+            crew_ids = self._report_crew_ids(db, report_id, report["crew_id"])
             expected_ids = {
                 row["id"] for row in db.execute(
-                    "SELECT id FROM morning_persons WHERE crew_id = ANY(%s) AND active=true",
-                    (crew_ids,),
+                    "SELECT id FROM morning_persons WHERE active=true AND crew_id = ANY(%s)",
+                    (list(crew_ids),),
                 ).fetchall()
             } if crew_ids else set()
             missing: list[str] = []
@@ -1450,6 +1469,7 @@ class MorningStore:
     def add_machine_state(self, declaration: MachineStateDeclaration) -> MachineStateDeclaration:
         try:
             with self._db() as db:
+                self._require_draft(db, declaration.report_id)
                 row = db.execute(
                     """INSERT INTO morning_machine_state_declarations
                        (id, machine_id, report_id, declared_at, state, state_note, provenance,
