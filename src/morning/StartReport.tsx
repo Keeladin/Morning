@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useMutation } from '@tanstack/react-query'
 import { morningApi } from './api'
-import { formatShiftDate } from './format'
+import { formatShiftDate, shiftDateForKind } from './format'
 import type { Crew, ReportingModel, ShiftIdentity, ShiftKind, ShiftReport, SupervisorContext } from './types'
 
 export function StartReport({ suggestion, supervisor, crews = [], reportingModel = 'tmm', demoMode = false, onStarted }: {
@@ -11,11 +11,12 @@ export function StartReport({ suggestion, supervisor, crews = [], reportingModel
   const [override, setOverride] = useState<ShiftKind | null>(null)
   const [crewIds, setCrewIds] = useState<string[]>([])
   const shiftKind = override ?? suggestion?.shift_kind ?? 'morning'
+  const shiftDate = suggestion ? shiftDateForKind(suggestion, shiftKind) : ''
   const tmm = reportingModel === 'tmm'
   const toggleCrew = (id: string) => setCrewIds(current => current.includes(id) ? current.filter(item => item !== id) : [...current, id])
   const start = useMutation({
     mutationFn: () => morningApi<ShiftReport>('/api/morning/draft', {
-      method: 'POST', body: JSON.stringify({ shift_date: suggestion?.shift_date, shift_kind: shiftKind, reporting_model: reportingModel, crew_ids: tmm ? crewIds : [] }),
+      method: 'POST', body: JSON.stringify({ shift_date: shiftDate, shift_kind: shiftKind, reporting_model: reportingModel, crew_ids: tmm ? crewIds : [] }),
     }), onSuccess: onStarted,
   })
   const disabled = !suggestion || start.isPending || (tmm && crewIds.length === 0)
@@ -24,7 +25,7 @@ export function StartReport({ suggestion, supervisor, crews = [], reportingModel
     <div className="morning-start-kicker">{reportingModel === 'construction' ? 'Construction' : 'TMM'} workspace</div>
     <h2 className="morning-stage-title">Start shift report</h2>
     <dl className="morning-start-report-facts">
-      <div className="morning-start-report-fact"><dt>Reporting date</dt><dd>{suggestion ? formatShiftDate(suggestion.shift_date) : '…'}</dd></div>
+      <div className="morning-start-report-fact"><dt>Reporting date</dt><dd>{suggestion ? formatShiftDate(shiftDate) : '…'}</dd></div>
       <div className="morning-start-report-fact"><dt>Shift</dt><dd><div className="morning-auth-toggle morning-shift-toggle" role="radiogroup" aria-label="Shift"><button type="button" className={shiftKind === 'morning' ? 'active' : ''} onClick={() => setOverride('morning')}>Morning</button><button type="button" className={shiftKind === 'afternoon' ? 'active' : ''} onClick={() => setOverride('afternoon')}>Afternoon</button><button type="button" className={shiftKind === 'night' ? 'active' : ''} onClick={() => setOverride('night')}>Night</button></div></dd></div>
       <div className="morning-start-report-fact"><dt>Supervisor</dt><dd>{supervisor?.display_name || '…'}</dd></div>
       {!tmm ? <div className="morning-start-report-fact"><dt>Crew</dt><dd>{supervisor?.crew_name || 'No Construction crew linked — contact an administrator'}</dd></div> : null}

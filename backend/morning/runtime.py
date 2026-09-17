@@ -26,7 +26,7 @@ from .models import (
     StopFixRecord,
 )
 from .renderers import render_compact_report, render_detailed_report, render_whatsapp_report
-from .shift import anchor_time_to_shift, require_zone, resolve_shift
+from .shift import anchor_time_to_shift, normalize_shift_override, require_zone, resolve_shift
 from .store import MorningError, MorningStore, UnknownRecordError, new_id
 
 DEFAULT_POLICY = ShiftPolicy(
@@ -92,6 +92,12 @@ class MorningRuntime:
             raise MorningError(f"unsupported shift kind: {shift_kind}")
         if reporting_model not in REPORTING_MODELS:
             raise MorningError(f"unsupported reporting model: {reporting_model}")
+        requested = normalize_shift_override(
+            self.current_shift(),
+            ShiftIdentity(shift_date=shift_date, shift_kind=shift_kind),
+        )
+        shift_date = requested.shift_date
+        shift_kind = requested.shift_kind
         selected_crews: tuple[str, ...] = ()
         if reporting_model == "tmm":
             selected_crews = tuple(dict.fromkeys(str(item).strip() for item in crew_ids if str(item).strip()))

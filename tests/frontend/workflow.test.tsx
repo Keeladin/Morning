@@ -4,6 +4,7 @@ import { AttendanceStage } from '../../src/morning/stages/Attendance'
 import { MachineActivityStage } from '../../src/morning/stages/MachineActivity'
 import { SafetyStage } from '../../src/morning/stages/Safety'
 import { resumeStage, sectionCompletion } from '../../src/morning/Workflow'
+import { shiftDateForKind } from '../../src/morning/format'
 import type { Machine, Person, ShiftReport, SyncState } from '../../src/morning/types'
 
 const people: Person[] = [
@@ -14,6 +15,16 @@ const machine: Machine = { id: 'm1', machine_id: 'ADR14', machine_type: null, se
 function report(overrides: Partial<ShiftReport> = {}): ShiftReport { return { id: 'r1', shift_date: '2026-09-01', shift_kind: 'morning', shift_id: '2026-09-01:morning', supervisor_principal_id: 'owner', crew_id: 'c1', crew_ids: ['c1'], reporting_model: 'tmm', status: 'draft', attendance: [], stop_fix: [], cards: [], machine_events: [], construction_work: [], other_activities: [], brothers_keeper: null, created_at: 'now', updated_at: new Date().toISOString(), submitted_at: null, safety_reviewed_empty: false, machine_activity_reviewed_empty: false, other_activities_reviewed_empty: false, construction_work_reviewed_empty: false, construction_outstanding_reviewed_empty: false, ...overrides } }
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
+
+describe('shift override reporting date', () => {
+  it('maps an Afternoon override during Night back to the day that just ended', () => {
+    expect(shiftDateForKind({ shift_date: '2026-09-17', shift_kind: 'night', shift_id: '2026-09-17:night' }, 'afternoon')).toBe('2026-09-16')
+  })
+
+  it('keeps normal Morning and Afternoon reporting dates unchanged', () => {
+    expect(shiftDateForKind({ shift_date: '2026-09-17', shift_kind: 'morning', shift_id: '2026-09-17:morning' }, 'afternoon')).toBe('2026-09-17')
+  })
+})
 
 describe('workflow completion', () => {
   it('derives resume position from actual section completion', () => {

@@ -69,6 +69,19 @@ def test_shift_draft_roster_and_submission_semantics(runtime) -> None:
         app.add_other_activity(first.id, category=None, description="too late")
 
 
+def test_day_shift_override_after_22_uses_previous_calendar_date(runtime) -> None:
+    app, store, supervisor = runtime
+    crew = store.create_crew(name="Crew A")
+    report = app.start_draft(
+        supervisor.principal_id,
+        shift_date="2026-03-26",
+        shift_kind="afternoon",
+        crew_ids=(crew.id,),
+    )
+    assert app.current_shift().shift_id == "2026-03-26:night"
+    assert report.shift_id == "2026-03-25:afternoon"
+
+
 def test_multicrew_submission_accepts_complete_combined_attendance(runtime) -> None:
     app, store, supervisor = runtime
     crew_a = store.create_crew(name="Crew A")

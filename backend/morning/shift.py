@@ -74,6 +74,23 @@ def resolve_shift(policy: ShiftPolicy, *, at: datetime) -> ShiftIdentity:
     return ShiftIdentity(shift_date=reporting_date.isoformat(), shift_kind=kind)
 
 
+def normalize_shift_override(current: ShiftIdentity, requested: ShiftIdentity) -> ShiftIdentity:
+    """Map a day-shift override during Night back to the calendar day it actually belongs to.
+
+    Night reports use the date on which the shift finishes. After 22:00 that means the
+    current Night identity is already tomorrow, while a supervisor finishing Morning or
+    Afternoon work is still reporting the calendar day that just ended.
+    """
+    if (
+        current.shift_kind == "night"
+        and requested.shift_kind in {"morning", "afternoon"}
+        and requested.shift_date == current.shift_date
+    ):
+        prior_date = date.fromisoformat(requested.shift_date) - timedelta(days=1)
+        return ShiftIdentity(shift_date=prior_date.isoformat(), shift_kind=requested.shift_kind)
+    return requested
+
+
 def anchor_time_to_shift(policy: ShiftPolicy, identity: ShiftIdentity, hhmm: str) -> datetime:
     """Anchor a bare HH:MM value to its calendar date inside the selected shift."""
     zone = require_zone(policy.timezone)

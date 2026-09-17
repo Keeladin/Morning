@@ -1,3 +1,5 @@
+import type { ShiftIdentity, ShiftKind } from './types'
+
 export function hhmm(iso: string): string {
   return /^\d{2}:\d{2}$/.test(iso) ? iso : iso.slice(11, 16)
 }
@@ -26,4 +28,12 @@ export function shiftLabel(shiftKind: string): string {
 
 export function shiftShortLabel(shiftKind: string): string {
   return ({ morning: 'Morning', afternoon: 'Afternoon', night: 'Night' } as Record<string, string>)[shiftKind] || shiftKind
+}
+
+export function shiftDateForKind(suggestion: ShiftIdentity, shiftKind: ShiftKind): string {
+  if (suggestion.shift_kind !== 'night' || shiftKind === 'night') return suggestion.shift_date
+  const [year, month, day] = suggestion.shift_date.split('-').map(Number)
+  if (!year || !month || !day) return suggestion.shift_date
+  const previous = new Date(Date.UTC(year, month - 1, day - 1))
+  return previous.toISOString().slice(0, 10)
 }
