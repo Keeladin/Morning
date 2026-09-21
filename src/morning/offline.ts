@@ -52,23 +52,50 @@ function removeOfflineData(name: string): void {
   const key = scopedKey(name); if (key) try { localStorage.removeItem(key) } catch { /* ignore */ }
 }
 
+function recoverOfflineDraft(model: ReportingModel): OfflineDraft | null {
+  const principal = getOfflinePrincipal()
+  if (!principal) return null
+  const prefix = `${ROOT}.${principal}.draft.id.`
+  const candidates: OfflineDraft[] = []
+  try {
+    for (let index = 0; index < localStorage.length; index += 1) {
+      const key = localStorage.key(index)
+      if (!key?.startsWith(prefix)) continue
+      const item = readJson<OfflineDraft>(key)
+      if (item?.report.reporting_model === model && item.report.status === 'draft') candidates.push(item)
+    }
+  } catch { return null }
+  candidates.sort((left, right) =>
+    Date.parse(right.report.updated_at || right.report.created_at) - Date.parse(left.report.updated_at || left.report.created_at))
+  return candidates[0] || null
+}
+
 export function loadOfflineDraft(model: ReportingModel): OfflineDraft | null {
   const currentId = getOfflineData<string>(currentDraftName(model))
   if (currentId) {
     const current = getOfflineData<OfflineDraft>(draftRecordName(currentId))
     if (current) return current
+    removeOfflineData(currentDraftName(model))
   }
   // One-time compatibility with the original single-draft-per-model cache.
   const legacy = getOfflineData<OfflineDraft>(`draft.${model}`)
   if (legacy) {
     saveOfflineDraft(legacy.report, legacy.pending, true)
     removeOfflineData(`draft.${model}`)
+    return legacy
   }
-  return legacy
+  // Recovery for drafts written by older builds that stored the report record
+  // but failed to maintain the current-draft pointer.
+  const recovered = recoverOfflineDraft(model)
+  if (recovered) cacheOfflineData(currentDraftName(model), recovered.report.id)
+  return recovered
 }
 export function saveOfflineDraft(report: ShiftReport, pending: boolean, makeCurrent = false): ShiftReport {
   cacheOfflineData(draftRecordName(report.id), { report, pending } satisfies OfflineDraft)
-  if (makeCurrent) cacheOfflineData(currentDraftName(report.reporting_model), report.id)
+  const currentName = currentDraftName(report.reporting_model)
+  const shouldBeCurrent = makeCurrent || report.status === 'draft'
+  if (shouldBeCurrent) cacheOfflineData(currentName, report.id)
+  else if (getOfflineData<string>(currentName) === report.id) removeOfflineData(currentName)
   return report
 }
 export function clearOfflineDraft(model: ReportingModel): void {
