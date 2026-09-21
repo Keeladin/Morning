@@ -13,11 +13,23 @@ export function Home({ principal, hasDraft, demoMode = false, onOpenReport }: { 
   const [recipient, setRecipient] = useState('')
   const [message, setMessage] = useState('')
   const [notice, setNotice] = useState('')
+  const [copiedReportId, setCopiedReportId] = useState<string | null>(null)
+  const [copyErrorReportId, setCopyErrorReportId] = useState<string | null>(null)
   const refresh = () => void qc.invalidateQueries({ queryKey: ['morning-home'] })
   const send = useMutation({ mutationFn: () => morningApi('/api/morning/messages', { method: 'POST', body: JSON.stringify({ recipient_principal_id: recipient, body: message }) }), onSuccess: () => { setMessage(''); refresh() } })
   const broadcast = useMutation({ mutationFn: () => morningApi('/api/morning/announcements', { method: 'POST', body: JSON.stringify({ body: notice }) }), onSuccess: () => { setNotice(''); refresh() } })
   const markRead = useMutation({ mutationFn: (id: string) => morningApi(`/api/morning/messages/${id}/read`, { method: 'POST', body: '{}' }), onSuccess: refresh })
   const data = query.data
+  const copyRecentReport = async (reportId: string, text: string) => {
+    setCopyErrorReportId(null)
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopiedReportId(reportId)
+      window.setTimeout(() => setCopiedReportId(current => current === reportId ? null : current), 2000)
+    } catch {
+      setCopyErrorReportId(reportId)
+    }
+  }
 
   return <div className="morning-home">
     {demoMode ? <div className="morning-demo-banner"><strong>DEMO MODE</strong><span>Reports stay on this device and production communication is disabled.</span></div> : null}
@@ -34,7 +46,14 @@ export function Home({ principal, hasDraft, demoMode = false, onOpenReport }: { 
 
     <section id="recent-reports" className="morning-home-card"><div className="morning-home-card-head"><div className="morning-home-card-title"><MorningIcon name="report"/><div><h2>Recent TMM reports</h2><p className="meta">Your five most recently submitted shift reports.</p></div></div></div>
       {query.isLoading ? <p className="empty">Loading…</p> : null}
-      <div className="morning-report-history">{data?.recent_reports.map(report => <details key={report.id} className="morning-history-report"><summary><span className="morning-history-icon"><MorningIcon name="check"/></span><span><strong>{shiftShortLabel(report.shift_kind)} Shift · {report.shift_date}</strong><small>{report.supervisor_name} · {when(report.submitted_at)}</small></span><span className="morning-history-view">View ›</span></summary><pre>{report.summary_text}</pre></details>)}</div>
+      <div className="morning-report-history">{data?.recent_reports.map(report => <details key={report.id} className="morning-history-report">
+        <summary><span className="morning-history-icon"><MorningIcon name="check"/></span><span><strong>{shiftShortLabel(report.shift_kind)} Shift · {report.shift_date}</strong><small>{report.supervisor_name} · {when(report.submitted_at)}</small></span><span className="morning-history-view">View ›</span></summary>
+        <pre>{report.summary_text}</pre>
+        <div className="morning-history-actions">
+          <button type="button" className="primary" onClick={() => void copyRecentReport(report.id, report.summary_text)}>{copiedReportId === report.id ? 'Copied!' : 'Copy WhatsApp report'}</button>
+          {copyErrorReportId === report.id ? <p className="error-text">Could not copy automatically — press and hold the report text to copy it.</p> : null}
+        </div>
+      </details>)}</div>
       {data && !data.recent_reports.length ? <p className="empty">No submitted TMM reports yet.</p> : null}
     </section>
 
