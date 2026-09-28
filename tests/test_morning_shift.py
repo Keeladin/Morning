@@ -5,7 +5,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from morning.models import ShiftIdentity, ShiftPolicy
-from morning.shift import ShiftError, anchor_time_to_shift, reporting_window, resolve_shift, shift_window
+from morning.shift import ShiftError, anchor_time_to_shift, operational_day_for_shift, reporting_window, resolve_shift, shift_window
 
 TZ = "Africa/Johannesburg"
 ZONE = ZoneInfo(TZ)
@@ -91,6 +91,18 @@ class ShiftResolutionTests(unittest.TestCase):
         start, end = reporting_window(_policy(), "2026-09-10")
         self.assertEqual(start, datetime(2026, 9, 9, 22, 0, tzinfo=ZONE))
         self.assertEqual(end, datetime(2026, 9, 10, 22, 0, tzinfo=ZONE))
+
+
+    def test_operational_day_closes_with_following_night_shift(self) -> None:
+        self.assertEqual(operational_day_for_shift(ShiftIdentity("2026-09-28", "morning")), "2026-09-28")
+        self.assertEqual(operational_day_for_shift(ShiftIdentity("2026-09-28", "afternoon")), "2026-09-28")
+        # Monday Night runs Monday 22:00 -> Tuesday 06:00 and is stored with Tuesday's shift_date.
+        self.assertEqual(operational_day_for_shift(ShiftIdentity("2026-09-29", "night")), "2026-09-28")
+
+    def test_sunday_night_closes_friday_operational_day(self) -> None:
+        # Sunday 27 Sep 22:00 -> Monday 28 Sep 06:00 is stored as 28 Sep Night,
+        # but the weekend roster uses it to close Friday 25 Sep.
+        self.assertEqual(operational_day_for_shift(ShiftIdentity("2026-09-28", "night")), "2026-09-25")
 
 
 class AnchorTimeToShiftTests(unittest.TestCase):

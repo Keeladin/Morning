@@ -26,7 +26,7 @@ from .models import (
     StopFixRecord,
 )
 from .renderers import render_compact_report, render_daily_breakdown_report, render_detailed_report, render_whatsapp_report
-from .shift import anchor_time_to_shift, normalize_shift_override, require_zone, resolve_shift
+from .shift import anchor_time_to_shift, normalize_shift_override, operational_day_for_shift, require_zone, resolve_shift
 from .store import MorningError, MorningStore, UnknownRecordError, new_id
 
 DEFAULT_POLICY = ShiftPolicy(
@@ -580,11 +580,32 @@ class MorningRuntime:
             construction_crew=construction_crew,
         )
 
-    def daily_breakdown_text(self, reporting_date: str) -> str:
-        reports = tuple(
-            report for report in self.store.list_reports(shift_date=reporting_date, status="submitted")
+    def daily_shift_reports(self, reporting_date: str) -> tuple[ShiftReport, ...]:
+        return tuple(
+            report
+            for report in self.store.list_reports(status="submitted")
             if report.reporting_model == "tmm"
+            and operational_day_for_shift(
+                ShiftIdentity(shift_date=report.shift_date, shift_kind=report.shift_kind)
+            ) == reporting_date
         )
+
+    def daily_reporting_dates(self) -> tuple[str, ...]:
+        return tuple(
+            sorted(
+                {
+                    operational_day_for_shift(
+                        ShiftIdentity(shift_date=report.shift_date, shift_kind=report.shift_kind)
+                    )
+                    for report in self.store.list_reports(status="submitted")
+                    if report.reporting_model == "tmm"
+                },
+                reverse=True,
+            )
+        )
+
+    def daily_breakdown_text(self, reporting_date: str) -> str:
+        reports = self.daily_shift_reports(reporting_date)
         persons_by_id = {person.id: person for person in self.store.list_persons()}
         machines_by_id = {machine.id: machine for machine in self.store.list_machines()}
         return render_daily_breakdown_report(

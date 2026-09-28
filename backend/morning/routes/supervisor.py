@@ -135,11 +135,8 @@ async def list_daily_reports(request: Request) -> JSONResponse:
         return JSONResponse({"error": "TMM supervisor access is required"}, status_code=403)
 
     items = []
-    for reporting_date in runtime.store.list_submitted_reporting_dates(reporting_model="tmm"):
-        reports = tuple(
-            report for report in runtime.store.list_reports(shift_date=reporting_date, status="submitted")
-            if report.reporting_model == "tmm"
-        )
+    for reporting_date in runtime.daily_reporting_dates():
+        reports = runtime.daily_shift_reports(reporting_date)
         shift_kinds = tuple(
             kind for kind in ("night", "morning", "afternoon")
             if any(report.shift_kind == kind for report in reports)

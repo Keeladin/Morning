@@ -91,6 +91,24 @@ def normalize_shift_override(current: ShiftIdentity, requested: ShiftIdentity) -
     return requested
 
 
+def operational_day_for_shift(identity: ShiftIdentity) -> str:
+    """Return the business-day label used by consolidated daily TMM reports.
+
+    Morning and Afternoon belong to their calendar date. Night normally closes
+    the operational day on which that Night shift starts. The mine's weekend
+    roster has no Friday/Saturday Night shift, so Sunday Night closes Friday.
+    """
+
+    shift_date = date.fromisoformat(identity.shift_date)
+    if identity.shift_kind != "night":
+        return shift_date.isoformat()
+
+    night_start_date = shift_date - timedelta(days=1)
+    if night_start_date.weekday() == 6:  # Sunday Night closes Friday's operating day.
+        return (night_start_date - timedelta(days=2)).isoformat()
+    return night_start_date.isoformat()
+
+
 def anchor_time_to_shift(policy: ShiftPolicy, identity: ShiftIdentity, hhmm: str) -> datetime:
     """Anchor a bare HH:MM value to its calendar date inside the selected shift."""
     zone = require_zone(policy.timezone)

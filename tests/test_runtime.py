@@ -216,38 +216,49 @@ def test_whatsapp_consolidates_machine_events_without_double_counting_overlap(ru
     assert text_output.index("22:45-22:55") < text_output.index("23:00-01:10") < text_output.index("00:30-01:10")
 
 
-def test_daily_breakdown_combines_all_three_tmm_shifts(runtime) -> None:
+def _submit_daily_test_shift(app, store, supervisor, crew, person, machine, *, shift_date, shift_kind, start, end, issue) -> None:
+    report = app.start_draft(
+        supervisor.principal_id,
+        shift_date=shift_date,
+        shift_kind=shift_kind,
+        crew_ids=(crew.id,),
+    )
+    app.set_attendance(report.id, (AttendanceEntry(person.id, True),))
+    app.set_brothers_keeper(report.id, f"{shift_kind} contribution")
+    app.set_empty_section_reviewed(report.id, section="safety", reviewed=True)
+    app.add_machine_event(
+        report.id,
+        machine_id=machine.id,
+        start_hhmm=start,
+        end_hhmm=end,
+        issue=issue,
+        person_id=person.id,
+    )
+    app.set_empty_section_reviewed(report.id, section="other_activities", reviewed=True)
+    app.submit_report(report.id)
+
+
+def test_daily_breakdown_closes_monday_after_monday_night(runtime) -> None:
     app, store, supervisor = runtime
     crew = store.create_crew(name="Crew A")
     person = store.create_person(name="Jurie", employee_number=None, role="Supervisor", crew_id=crew.id)
     store.link_account_person(supervisor.principal_id, person.id)
     machine = store.create_machine(machine_id="STC 09", machine_type="Scissor", section=None)
 
-    events = (
-        ("night", "23:00", "23:15", "battery"),
-        ("morning", "08:00", "08:20", "hydraulic hose"),
-        ("afternoon", "15:00", "15:30", "hub repair"),
+    _submit_daily_test_shift(
+        app, store, supervisor, crew, person, machine,
+        shift_date="2026-03-25", shift_kind="morning", start="08:00", end="08:20", issue="hydraulic hose",
     )
-    for shift_kind, start, end, issue in events:
-        report = app.start_draft(
-            supervisor.principal_id,
-            shift_date="2026-03-25",
-            shift_kind=shift_kind,
-            crew_ids=(crew.id,),
-        )
-        app.set_attendance(report.id, (AttendanceEntry(person.id, True),))
-        app.set_brothers_keeper(report.id, f"{shift_kind} contribution")
-        app.set_empty_section_reviewed(report.id, section="safety", reviewed=True)
-        app.add_machine_event(
-            report.id,
-            machine_id=machine.id,
-            start_hhmm=start,
-            end_hhmm=end,
-            issue=issue,
-            person_id=person.id,
-        )
-        app.set_empty_section_reviewed(report.id, section="other_activities", reviewed=True)
-        app.submit_report(report.id)
+    _submit_daily_test_shift(
+        app, store, supervisor, crew, person, machine,
+        shift_date="2026-03-25", shift_kind="afternoon", start="15:00", end="15:30", issue="hub repair",
+    )
+    # Night is stored on the date it finishes: Wednesday 25th Night starts Tue 24th.
+    # To close Wednesday 25th, use Thursday 26th Night (Wed 22:00 -> Thu 06:00).
+    _submit_daily_test_shift(
+        app, store, supervisor, crew, person, machine,
+        shift_date="2026-03-26", shift_kind="night", start="23:00", end="23:15", issue="battery",
+    )
 
     output = app.daily_breakdown_text("2026-03-25")
     assert "*Daily TMM Breakdown Report — 2026-03-25*" in output
@@ -256,7 +267,35 @@ def test_daily_breakdown_combines_all_three_tmm_shifts(runtime) -> None:
     assert "*Night · 23:00-23:15 (15m)*\nbattery · Assigned: Jurie" in output
     assert "*Morning · 08:00-08:20 (20m)*\nhydraulic hose · Assigned: Jurie" in output
     assert "*Afternoon · 15:00-15:30 (30m)*\nhub repair · Assigned: Jurie" in output
-    assert store.list_submitted_reporting_dates(reporting_model="tmm") == ("2026-03-25",)
+    assert app.daily_reporting_dates() == ("2026-03-25",)
+
+
+def test_friday_daily_breakdown_uses_sunday_night(runtime) -> None:
+    app, store, supervisor = runtime
+    crew = store.create_crew(name="Crew A")
+    person = store.create_person(name="Jurie", employee_number=None, role="Supervisor", crew_id=crew.id)
+    store.link_account_person(supervisor.principal_id, person.id)
+    machine = store.create_machine(machine_id="RLH 03", machine_type="LHD", section=None)
+
+    _submit_daily_test_shift(
+        app, store, supervisor, crew, person, machine,
+        shift_date="2026-03-27", shift_kind="morning", start="08:00", end="08:10", issue="inspection",
+    )
+    _submit_daily_test_shift(
+        app, store, supervisor, crew, person, machine,
+        shift_date="2026-03-27", shift_kind="afternoon", start="16:00", end="16:10", issue="hose check",
+    )
+    # Sunday 29th Night finishes Monday 30th, so its stored shift_date is Monday 30th.
+    _submit_daily_test_shift(
+        app, store, supervisor, crew, person, machine,
+        shift_date="2026-03-30", shift_kind="night", start="23:00", end="23:10", issue="night repair",
+    )
+
+    reports = app.daily_shift_reports("2026-03-27")
+    assert {report.shift_kind for report in reports} == {"morning", "afternoon", "night"}
+    output = app.daily_breakdown_text("2026-03-27")
+    assert "Shift coverage: Night ✓ · Morning ✓ · Afternoon ✓" in output
+    assert "night repair" in output
 
 
 def test_submission_reports_every_unresolved_section(runtime) -> None:
