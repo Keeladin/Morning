@@ -48,6 +48,8 @@ export type ShiftReport = {
 }
 
 export type HomeReport = { id: string; shift_date: string; shift_kind: ShiftKind; supervisor_name: string; submitted_at: string | null; brothers_keeper: string | null; summary_text: string }
+export type DailyReport = { reporting_date: string; shift_kinds: ShiftKind[]; shift_count: number; complete: boolean; summary_text: string }
+export type DailyReportsData = { daily_reports: DailyReport[] }
 export type SupervisorRecipient = { principal_id: string; display_name: string; username: string; status: string; person_id: string | null }
 export type MorningMessage = { id: string; sender_principal_id: string; recipient_principal_id: string | null; kind: 'direct' | 'announcement'; body: string; created_at: string; read_at: string | null; sender_name: string; recipient_name?: string }
 export type HomeData = { recent_reports: HomeReport[]; announcements: MorningMessage[]; messages: MorningMessage[]; unread_count: number; supervisors: SupervisorRecipient[] }

@@ -122,6 +122,40 @@ async def get_home(request: Request) -> JSONResponse:
     })
 
 
+async def list_daily_reports(request: Request) -> JSONResponse:
+    gate = require_session(request)
+    if isinstance(gate, JSONResponse):
+        return gate
+    runtime = _runtime(request)
+    principal = runtime.accounts.principal_for(gate.principal_id)
+    if principal.demo_mode:
+        return JSONResponse({"daily_reports": []})
+    supervisor_ids = {item["principal_id"] for item in runtime.store.list_tmm_supervisors(active_only=True)}
+    if gate.principal_id not in supervisor_ids:
+        return JSONResponse({"error": "TMM supervisor access is required"}, status_code=403)
+
+    items = []
+    for reporting_date in runtime.store.list_submitted_reporting_dates(reporting_model="tmm"):
+        reports = tuple(
+            report for report in runtime.store.list_reports(shift_date=reporting_date, status="submitted")
+            if report.reporting_model == "tmm"
+        )
+        shift_kinds = tuple(
+            kind for kind in ("night", "morning", "afternoon")
+            if any(report.shift_kind == kind for report in reports)
+        )
+        items.append(
+            {
+                "reporting_date": reporting_date,
+                "shift_kinds": list(shift_kinds),
+                "shift_count": len(shift_kinds),
+                "complete": len(shift_kinds) == 3,
+                "summary_text": runtime.daily_breakdown_text(reporting_date),
+            }
+        )
+    return JSONResponse({"daily_reports": items})
+
+
 async def send_direct_message(request: Request) -> JSONResponse:
     gate = require_mutation_auth(request)
     if isinstance(gate, JSONResponse):
@@ -671,6 +705,7 @@ routes = [
     Route("/api/morning/personnel", list_tmm_personnel, methods=["GET"]),
     Route("/api/morning/crews", list_tmm_crews, methods=["GET"]),
     Route("/api/morning/home", get_home, methods=["GET"]),
+    Route("/api/morning/daily-reports", list_daily_reports, methods=["GET"]),
     Route("/api/morning/messages", send_direct_message, methods=["POST"]),
     Route("/api/morning/announcements", post_announcement, methods=["POST"]),
     Route("/api/morning/messages/{message_id}/read", mark_direct_message_read, methods=["POST"]),

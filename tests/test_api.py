@@ -458,6 +458,14 @@ def test_tmm_home_messages_notice_board_and_department_personnel_pool(client: Te
     payload = home.json()
     assert payload["recent_reports"][0]["id"] == report["id"]
     assert "*Brothers Keeper*\nImprove pedestrian separation at the workshop." in payload["recent_reports"][0]["summary_text"]
+    daily = lyle_browser.get("/api/morning/daily-reports")
+    assert daily.status_code == 200, daily.text
+    daily_report = daily.json()["daily_reports"][0]
+    assert daily_report["reporting_date"] == "2026-09-10"
+    assert daily_report["shift_kinds"] == ["morning"]
+    assert daily_report["shift_count"] == 1
+    assert daily_report["complete"] is False
+    assert "*Daily TMM Breakdown Report — 2026-09-10*" in daily_report["summary_text"]
     assert payload["announcements"][0]["body"] == "Workshop briefing at shift start."
     assert payload["messages"][0]["body"] == "Please check the handover."
     assert payload["unread_count"] == 1

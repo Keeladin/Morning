@@ -25,7 +25,7 @@ from .models import (
     ShiftReport,
     StopFixRecord,
 )
-from .renderers import render_compact_report, render_detailed_report, render_whatsapp_report
+from .renderers import render_compact_report, render_daily_breakdown_report, render_detailed_report, render_whatsapp_report
 from .shift import anchor_time_to_shift, normalize_shift_override, require_zone, resolve_shift
 from .store import MorningError, MorningStore, UnknownRecordError, new_id
 
@@ -578,6 +578,21 @@ class MorningRuntime:
             timezone=self.shift_policy().timezone,
             machine_states=self.store.list_machine_states(report_id=report_id),
             construction_crew=construction_crew,
+        )
+
+    def daily_breakdown_text(self, reporting_date: str) -> str:
+        reports = tuple(
+            report for report in self.store.list_reports(shift_date=reporting_date, status="submitted")
+            if report.reporting_model == "tmm"
+        )
+        persons_by_id = {person.id: person for person in self.store.list_persons()}
+        machines_by_id = {machine.id: machine for machine in self.store.list_machines()}
+        return render_daily_breakdown_report(
+            reporting_date=reporting_date,
+            shift_reports=reports,
+            persons_by_id=persons_by_id,
+            machines_by_id=machines_by_id,
+            timezone=self.shift_policy().timezone,
         )
 
     def daily_bundle(self, reporting_date: str, *, require_control_room: bool = True) -> ReportBundle:

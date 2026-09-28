@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { morningApi } from './api'
-import type { HomeData, MorningPrincipal } from './types'
+import type { DailyReportsData, HomeData, MorningPrincipal } from './types'
 import { shiftShortLabel } from './format'
 import { MorningIcon } from './ui'
 
@@ -9,7 +9,13 @@ function when(value: string | null): string { return value ? new Date(value).toL
 
 export function Home({ principal, hasDraft, demoMode = false, onOpenReport }: { principal: MorningPrincipal; hasDraft: boolean; demoMode?: boolean; onOpenReport: () => void }) {
   const qc = useQueryClient()
+  const [reportTab, setReportTab] = useState<'shift'|'daily'>('shift')
   const query = useQuery({ queryKey: ['morning-home'], queryFn: () => morningApi<HomeData>('/api/morning/home') })
+  const dailyQuery = useQuery({
+    queryKey: ['morning-daily-reports'],
+    queryFn: () => morningApi<DailyReportsData>('/api/morning/daily-reports'),
+    enabled: reportTab === 'daily',
+  })
   const [recipient, setRecipient] = useState('')
   const [message, setMessage] = useState('')
   const [notice, setNotice] = useState('')
@@ -44,17 +50,40 @@ export function Home({ principal, hasDraft, demoMode = false, onOpenReport }: { 
       <a href="#messages" className="morning-quick-card"><MorningIcon name="message"/><span><strong>Messages</strong><small>{data?.unread_count ? `${data.unread_count} unread` : 'No unread messages'}</small></span>{data?.unread_count ? <em>{data.unread_count}</em> : <b>›</b>}</a>
     </div>
 
-    <section id="recent-reports" className="morning-home-card"><div className="morning-home-card-head"><div className="morning-home-card-title"><MorningIcon name="report"/><div><h2>Recent TMM reports</h2><p className="meta">Your five most recently submitted shift reports.</p></div></div></div>
-      {query.isLoading ? <p className="empty">Loading…</p> : null}
-      <div className="morning-report-history">{data?.recent_reports.map(report => <details key={report.id} className="morning-history-report">
-        <summary><span className="morning-history-icon"><MorningIcon name="check"/></span><span><strong>{shiftShortLabel(report.shift_kind)} Shift · {report.shift_date}</strong><small>{report.supervisor_name} · {when(report.submitted_at)}</small></span><span className="morning-history-view">View ›</span></summary>
-        <pre>{report.summary_text}</pre>
-        <div className="morning-history-actions">
-          <button type="button" className="primary" onClick={() => void copyRecentReport(report.id, report.summary_text)}>{copiedReportId === report.id ? 'Copied!' : 'Copy WhatsApp report'}</button>
-          {copyErrorReportId === report.id ? <p className="error-text">Could not copy automatically — press and hold the report text to copy it.</p> : null}
-        </div>
-      </details>)}</div>
-      {data && !data.recent_reports.length ? <p className="empty">No submitted TMM reports yet.</p> : null}
+    <section id="recent-reports" className="morning-home-card">
+      <div className="morning-home-card-head"><div className="morning-home-card-title"><MorningIcon name="report"/><div><h2>Reports</h2><p className="meta">Shift reports and consolidated daily TMM breakdowns.</p></div></div></div>
+      <div className="morning-report-tabs" role="tablist" aria-label="Report history">
+        <button type="button" role="tab" aria-selected={reportTab === 'shift'} className={reportTab === 'shift' ? 'active' : ''} onClick={() => setReportTab('shift')}>Shift Reports</button>
+        <button type="button" role="tab" aria-selected={reportTab === 'daily'} className={reportTab === 'daily' ? 'active' : ''} onClick={() => setReportTab('daily')}>Daily Reports</button>
+      </div>
+
+      {reportTab === 'shift' ? <>
+        {query.isLoading ? <p className="empty">Loading…</p> : null}
+        <div className="morning-report-history">{data?.recent_reports.map(report => <details key={report.id} className="morning-history-report">
+          <summary><span className="morning-history-icon"><MorningIcon name="check"/></span><span><strong>{shiftShortLabel(report.shift_kind)} Shift · {report.shift_date}</strong><small>{report.supervisor_name} · {when(report.submitted_at)}</small></span><span className="morning-history-view">View ›</span></summary>
+          <pre>{report.summary_text}</pre>
+          <div className="morning-history-actions">
+            <button type="button" className="primary" onClick={() => void copyRecentReport(report.id, report.summary_text)}>{copiedReportId === report.id ? 'Copied!' : 'Copy WhatsApp report'}</button>
+            {copyErrorReportId === report.id ? <p className="error-text">Could not copy automatically — press and hold the report text to copy it.</p> : null}
+          </div>
+        </details>)}</div>
+        {data && !data.recent_reports.length ? <p className="empty">No submitted TMM reports yet.</p> : null}
+      </> : <>
+        {dailyQuery.isLoading ? <p className="empty">Loading daily reports…</p> : null}
+        <div className="morning-report-history">{dailyQuery.data?.daily_reports.map(report => {
+          const copyKey = 'daily:' + report.reporting_date
+          return <details key={report.reporting_date} className={'morning-history-report morning-daily-report ' + (report.complete ? 'complete' : 'building')}>
+            <summary><span className="morning-history-icon"><MorningIcon name={report.complete ? 'check' : 'clock'}/></span><span><strong>Daily Breakdown · {report.reporting_date}</strong><small>{report.shift_count}/3 shifts · {report.complete ? 'Complete' : 'Still building'}</small></span><span className="morning-history-view">View ›</span></summary>
+            <pre>{report.summary_text}</pre>
+            <div className="morning-history-actions">
+              <button type="button" className="primary" onClick={() => void copyRecentReport(copyKey, report.summary_text)}>{copiedReportId === copyKey ? 'Copied!' : 'Copy daily breakdown'}</button>
+              {copyErrorReportId === copyKey ? <p className="error-text">Could not copy automatically — press and hold the report text to copy it.</p> : null}
+            </div>
+          </details>
+        })}</div>
+        {dailyQuery.data && !dailyQuery.data.daily_reports.length ? <p className="empty">No daily TMM reports yet.</p> : null}
+        {dailyQuery.isError ? <p className="error-text">Could not load daily reports. Check the connection and try again.</p> : null}
+      </>}
     </section>
 
     <section id="notice-board" className="morning-home-card morning-notice-board"><div className="morning-home-card-head"><div className="morning-home-card-title"><MorningIcon name="notice"/><div><h2>Notice board</h2><p className="meta">Important updates visible to every TMM supervisor.</p></div></div></div>

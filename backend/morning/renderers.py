@@ -236,6 +236,85 @@ def render_whatsapp_report(
     return "\n".join(lines)
 
 
+def render_daily_breakdown_report(
+    *,
+    reporting_date: str,
+    shift_reports: tuple[ShiftReport, ...],
+    persons_by_id: dict[str, Person],
+    machines_by_id: dict[str, Machine],
+    timezone: str,
+) -> str:
+    """Combine submitted TMM machine activity for one operational reporting date."""
+
+    def machine_label(machine_id: str) -> str:
+        machine = machines_by_id.get(machine_id)
+        return machine.machine_id if machine is not None else machine_id
+
+    def person_label(person_id: str | None) -> str | None:
+        if not person_id:
+            return None
+        person = persons_by_id.get(person_id)
+        return person.name if person is not None else person_id
+
+    shift_order = {"night": 0, "morning": 1, "afternoon": 2}
+    ordered_reports = tuple(
+        sorted(
+            shift_reports,
+            key=lambda report: (
+                shift_order.get(report.shift_kind, 99),
+                report.submitted_at or report.updated_at,
+                report.id,
+            ),
+        )
+    )
+    present_kinds = {report.shift_kind for report in ordered_reports}
+    coverage = " · ".join(
+        f"{_shift_label(kind).replace(' Shift', '')} {'✓' if kind in present_kinds else '—'}"
+        for kind in ("night", "morning", "afternoon")
+    )
+    lines = [
+        f"*Daily TMM Breakdown Report — {reporting_date}*",
+        f"Shift coverage: {coverage}",
+        "",
+        "*Machine Activity*",
+    ]
+
+    events_by_machine: dict[str, list[tuple[ShiftReport, MachineEvent]]] = {}
+    for report in ordered_reports:
+        for event in report.machine_events:
+            events_by_machine.setdefault(event.machine_id, []).append((report, event))
+
+    if not events_by_machine:
+        lines.append("No machine breakdowns reported across the submitted shifts.")
+        return "\n".join(lines)
+
+    for machine_index, machine_id in enumerate(sorted(events_by_machine, key=machine_label)):
+        paired_events = sorted(
+            events_by_machine[machine_id],
+            key=lambda pair: (pair[1].start_time, pair[1].end_time, pair[1].id),
+        )
+        events = tuple(event for _report, event in paired_events)
+        lines.append(f"*{machine_label(machine_id)} — Total downtime: {_machine_total_duration(events)}*")
+        prior_intervals: list[TimeInterval] = []
+        for report, event in paired_events:
+            interval = _event_interval(event)
+            suffix = _overlap_suffix(interval, tuple(prior_intervals))
+            assigned_name = person_label(event.person_id)
+            assigned = f" · Assigned: {assigned_name}" if assigned_name else ""
+            shift = _shift_label(report.shift_kind).replace(" Shift", "")
+            lines.append(
+                f"*{shift} · {_hhmm(event.start_time, timezone)}-{_hhmm(event.end_time, timezone)} "
+                f"({_interval_duration(event.start_time, event.end_time)}{suffix})*"
+            )
+            lines.append(f"{event.issue}{assigned}")
+            if interval is not None:
+                prior_intervals.append(interval)
+        if machine_index < len(events_by_machine) - 1:
+            lines.append("")
+
+    return "\n".join(lines)
+
+
 def render_detailed_report(bundle: ReportBundle) -> str:
     lines: list[str] = [f"*24-Hour Departmental Report — {bundle.reporting_date}*", "", "Expected inputs:"]
     for item in bundle.expected_inputs:

@@ -216,6 +216,49 @@ def test_whatsapp_consolidates_machine_events_without_double_counting_overlap(ru
     assert text_output.index("22:45-22:55") < text_output.index("23:00-01:10") < text_output.index("00:30-01:10")
 
 
+def test_daily_breakdown_combines_all_three_tmm_shifts(runtime) -> None:
+    app, store, supervisor = runtime
+    crew = store.create_crew(name="Crew A")
+    person = store.create_person(name="Jurie", employee_number=None, role="Supervisor", crew_id=crew.id)
+    store.link_account_person(supervisor.principal_id, person.id)
+    machine = store.create_machine(machine_id="STC 09", machine_type="Scissor", section=None)
+
+    events = (
+        ("night", "23:00", "23:15", "battery"),
+        ("morning", "08:00", "08:20", "hydraulic hose"),
+        ("afternoon", "15:00", "15:30", "hub repair"),
+    )
+    for shift_kind, start, end, issue in events:
+        report = app.start_draft(
+            supervisor.principal_id,
+            shift_date="2026-03-25",
+            shift_kind=shift_kind,
+            crew_ids=(crew.id,),
+        )
+        app.set_attendance(report.id, (AttendanceEntry(person.id, True),))
+        app.set_brothers_keeper(report.id, f"{shift_kind} contribution")
+        app.set_empty_section_reviewed(report.id, section="safety", reviewed=True)
+        app.add_machine_event(
+            report.id,
+            machine_id=machine.id,
+            start_hhmm=start,
+            end_hhmm=end,
+            issue=issue,
+            person_id=person.id,
+        )
+        app.set_empty_section_reviewed(report.id, section="other_activities", reviewed=True)
+        app.submit_report(report.id)
+
+    output = app.daily_breakdown_text("2026-03-25")
+    assert "*Daily TMM Breakdown Report — 2026-03-25*" in output
+    assert "Shift coverage: Night ✓ · Morning ✓ · Afternoon ✓" in output
+    assert "*STC 09 — Total downtime: 1h 5m*" in output
+    assert "*Night · 23:00-23:15 (15m)*\nbattery · Assigned: Jurie" in output
+    assert "*Morning · 08:00-08:20 (20m)*\nhydraulic hose · Assigned: Jurie" in output
+    assert "*Afternoon · 15:00-15:30 (30m)*\nhub repair · Assigned: Jurie" in output
+    assert store.list_submitted_reporting_dates(reporting_model="tmm") == ("2026-03-25",)
+
+
 def test_submission_reports_every_unresolved_section(runtime) -> None:
     app, store, supervisor = runtime
     crew = store.create_crew(name="Crew A")

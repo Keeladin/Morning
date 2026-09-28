@@ -996,6 +996,16 @@ class MorningStore:
             ).fetchall()
         return tuple(self._load_report(row["id"]) for row in rows)
 
+    def list_submitted_reporting_dates(self, *, reporting_model: str = "tmm") -> tuple[str, ...]:
+        with self._db() as db:
+            rows = db.execute(
+                """SELECT DISTINCT shift_date FROM morning_reports
+                   WHERE status='submitted' AND reporting_model=%s
+                   ORDER BY shift_date DESC""",
+                (reporting_model,),
+            ).fetchall()
+        return tuple(_iso(row["shift_date"]) or "" for row in rows)
+
     def _require_draft(self, db: Connection[dict[str, Any]], report_id: str) -> dict[str, Any]:
         row = db.execute("SELECT * FROM morning_reports WHERE id=%s FOR UPDATE", (report_id,)).fetchone()
         if row is None:
