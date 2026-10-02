@@ -1,7 +1,7 @@
 import {
   addOfflineMachineState, applyOfflineReportMutation, cacheOfflineData, cacheOfflineSession, clearOfflineDraft, clearOfflineSession,
   getOfflineData, getOfflineSession, isOfflineReportPending, loadOfflineDraft, offlineDraftById, pendingOfflineDrafts,
-  saveOfflineDraft, setOfflinePrincipal, demoWhatsappText,
+  reconcileSyncedDraft, saveOfflineDraft, setOfflinePrincipal, demoWhatsappText,
 } from './offline'
 import type { ReportingModel, ShiftReport } from './types'
 
@@ -102,7 +102,7 @@ async function sendSnapshot(report: ShiftReport): Promise<ShiftReport> {
   if (!response.ok) throw apiError(response, body)
   if (!looksLikeReport(body)) throw new Error('Morning returned an invalid synchronization response.')
   const synced = { ...body, machine_states: report.machine_states || [], offline_submit_pending: undefined }
-  saveOfflineDraft(synced, false)
+  reconcileSyncedDraft(report.id, synced)
   window.dispatchEvent(new CustomEvent('morning:report-synced', { detail: { report: synced } }))
   return synced
 }

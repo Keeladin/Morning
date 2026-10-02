@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { morningApi } from '../../src/morning/api'
-import { cacheOfflineData, pendingOfflineDrafts, setOfflinePrincipal } from '../../src/morning/offline'
+import { morningApi, syncOfflineReports } from '../../src/morning/api'
+import { cacheOfflineData, loadOfflineDraft, offlineDraftById, pendingOfflineDrafts, saveOfflineDraft, setOfflinePrincipal } from '../../src/morning/offline'
 import type { MachineStateDeclaration, ShiftReport, SupervisorContext } from '../../src/morning/types'
 
 afterEach(() => {
@@ -144,6 +144,44 @@ describe('offline shift capture', () => {
     expect(restored.report?.id).toBe(orphan.id)
     expect(restored.report?.offline_submit_pending).toBe(true)
     expect(localStorage.getItem('morning.offline.v1.principal-lyle.draft.current.tmm')).toContain(orphan.id)
+  })
+
+
+  it('replaces an offline temporary report id after the server has already submitted the shift', async () => {
+    vi.spyOn(window.navigator, 'onLine', 'get').mockReturnValue(true)
+    setOfflinePrincipal('principal-jurie')
+    const local: ShiftReport = {
+      id: 'offline_report_stale', shift_date: '2026-10-01', shift_kind: 'night', shift_id: '2026-10-01:night',
+      supervisor_principal_id: 'principal-jurie', crew_id: 'crew-1', crew_ids: ['crew-1'], reporting_model: 'tmm',
+      status: 'draft', attendance: [{ person_id: 'person-1', present: true }], stop_fix: [], cards: [], machine_events: [],
+      machine_states: [], construction_work: [], other_activities: [], brothers_keeper: 'Local copy',
+      created_at: '2026-10-01T02:00:00Z', updated_at: '2026-10-01T03:30:00Z', submitted_at: null,
+      safety_reviewed_empty: true, machine_activity_reviewed_empty: true, other_activities_reviewed_empty: true,
+      construction_work_reviewed_empty: false, construction_outstanding_reviewed_empty: false, offline_submit_pending: true,
+    }
+    const submitted: ShiftReport = {
+      ...local, id: 'shiftreport_server', status: 'submitted', brothers_keeper: 'Server copy',
+      updated_at: '2026-10-01T03:01:16Z', submitted_at: '2026-10-01T03:01:16Z', offline_submit_pending: undefined,
+    }
+    saveOfflineDraft(local, true, true)
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = typeof input === 'string' ? input : input instanceof URL ? input.pathname : new URL(input.url).pathname
+      if (path === '/api/morning/auth/session') {
+        return new Response(JSON.stringify({
+          authenticated: true, principal: { principal_id: 'principal-jurie' }, csrf_token: 'csrf',
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+      }
+      if (path === '/api/morning/offline-sync') {
+        return new Response(JSON.stringify(submitted), { status: 200, headers: { 'Content-Type': 'application/json' } })
+      }
+      throw new Error('unexpected request: ' + path)
+    }))
+
+    await syncOfflineReports()
+
+    expect(offlineDraftById(local.id)).toBeNull()
+    expect(pendingOfflineDrafts()).toHaveLength(0)
+    expect(loadOfflineDraft('tmm')).toBeNull()
   })
 
 })

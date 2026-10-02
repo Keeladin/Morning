@@ -104,6 +104,12 @@ export function clearOfflineDraft(model: ReportingModel): void {
   removeOfflineData(currentDraftName(model))
   removeOfflineData(`draft.${model}`)
 }
+export function reconcileSyncedDraft(previousReportId: string, report: ShiftReport): ShiftReport {
+  if (previousReportId !== report.id) removeOfflineData(draftRecordName(previousReportId))
+  const currentName = currentDraftName(report.reporting_model)
+  if (getOfflineData<string>(currentName) === previousReportId) removeOfflineData(currentName)
+  return saveOfflineDraft(report, false, report.status === 'draft')
+}
 export function offlineDraftById(reportId: string): OfflineDraft | null {
   const direct = getOfflineData<OfflineDraft>(draftRecordName(reportId))
   if (direct) return direct
