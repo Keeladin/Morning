@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from uuid import uuid4
 
 import pytest
 from alembic import command
@@ -43,18 +44,33 @@ def migrated_database():
     if not database_url:
         pytest.skip("MORNING_DATABASE_URL is required for migration tests")
 
-    config = _config()
-    command.downgrade(config, "base")
-    command.upgrade(config, "head")
-    yield
-    command.downgrade(config, "base")
+    # Exercise migrations in an empty schema, independent of reports left by
+    # API/store tests. Never downgrade or clear the shared application's schema.
+    schema_name = f"migration_test_{uuid4().hex}"
+    admin_engine = create_database_engine(database_url)
+    with admin_engine.begin() as connection:
+        connection.execute(text(f'CREATE SCHEMA "{schema_name}"'))
 
-    engine = create_database_engine(database_url)
+    separator = "&" if "?" in database_url else "?"
+    isolated_url = f"{database_url}{separator}options=-csearch_path={schema_name}"
     try:
-        remaining = {name for name in inspect(engine).get_table_names() if name.startswith("morning_")}
-        assert remaining == set()
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setenv("MORNING_DATABASE_URL", isolated_url)
+            config = _config()
+            command.upgrade(config, "head")
+            yield
+            command.downgrade(config, "base")
+
+            engine = create_database_engine(isolated_url)
+            try:
+                remaining = {name for name in inspect(engine).get_table_names() if name.startswith("morning_")}
+                assert remaining == set()
+            finally:
+                engine.dispose()
     finally:
-        engine.dispose()
+        with admin_engine.begin() as connection:
+            connection.execute(text(f'DROP SCHEMA "{schema_name}" CASCADE'))
+        admin_engine.dispose()
 
 
 def test_initial_schema_and_machine_state_migrations_create_expected_tables() -> None:
