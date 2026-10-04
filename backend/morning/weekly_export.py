@@ -129,7 +129,7 @@ class WeeklyAtlasExporter:
     def _reports_for_week(self, start: date) -> tuple[ShiftReport, ...]:
         end = start + timedelta(days=6)
         reports = [
-            report for report in self.store.list_reports()
+            report for report in self.store.list_reports(status="submitted")
             if report.status == "submitted" and start <= date.fromisoformat(report.shift_date) <= end
         ]
         return tuple(sorted(reports, key=lambda item: (item.shift_date, item.shift_kind, item.reporting_model, item.id)))

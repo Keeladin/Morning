@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
-import { morningApi, setMorningCsrfToken, syncOfflineReports } from './api'
+import { morningApi, setMorningCsrfToken, syncOfflineReports, resumeOfflineSync } from './api'
 import { AdminWorkspaceGate } from './AdminWorkspaceGate'
 import { InstallPrompt } from './InstallPrompt'
 import { PwaUpdate } from './PwaUpdate'
@@ -28,10 +28,13 @@ function MorningInner() {
   useEffect(() => { void morningApi<MorningSession>('/api/morning/auth/session').then((result) => { setSession(result); if (result.csrf_token) setMorningCsrfToken(result.csrf_token) }).catch(() => { setSessionUnavailable(true); setSession({authenticated:false}) }).finally(() => setReady(true)) }, [])
   const onAuthed = (result: MorningSession) => { setSession(result); if (result.csrf_token) setMorningCsrfToken(result.csrf_token); void syncOfflineReports() }
   useEffect(() => {
-    const sync = () => void syncOfflineReports()
+    const sync = () => resumeOfflineSync()
+    const visible = () => { if (document.visibilityState === 'visible') sync() }
+    window.addEventListener('focus', sync)
+    document.addEventListener('visibilitychange', visible)
     window.addEventListener('online', sync)
     if (navigator.onLine) sync()
-    return () => window.removeEventListener('online', sync)
+    return () => { window.removeEventListener('online', sync); window.removeEventListener('focus', sync); document.removeEventListener('visibilitychange', visible) }
   }, [])
   const signOut = async () => { try { await morningApi('/api/morning/auth/logout',{method:'POST',body:'{}'}) } finally { setMorningCsrfToken(null); clearOfflineSession(); setOfflinePrincipal(null); queryClient.clear(); setSession({authenticated:false}) } }
   const targetAdminWorkspace = reportingModel === 'construction' ? 'construction' : 'morning'

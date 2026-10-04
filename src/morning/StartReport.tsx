@@ -9,29 +9,30 @@ export function StartReport({ suggestion, supervisor, crews = [], reportingModel
   onStarted: (report: ShiftReport) => void
 }) {
   const [override, setOverride] = useState<ShiftKind | null>(null)
+  const [selectedDate, setSelectedDate] = useState<string | null>(null)
   const [crewIds, setCrewIds] = useState<string[]>([])
   const shiftKind = override ?? suggestion?.shift_kind ?? 'morning'
-  const shiftDate = suggestion ? shiftDateForKind(suggestion, shiftKind) : ''
+  const shiftDate = selectedDate ?? (suggestion ? shiftDateForKind(suggestion, shiftKind) : '')
   const tmm = reportingModel === 'tmm'
   const toggleCrew = (id: string) => setCrewIds(current => current.includes(id) ? current.filter(item => item !== id) : [...current, id])
   const start = useMutation({
     mutationFn: () => morningApi<ShiftReport>('/api/morning/draft', {
-      method: 'POST', body: JSON.stringify({ shift_date: shiftDate, shift_kind: shiftKind, reporting_model: reportingModel, crew_ids: tmm ? crewIds : [] }),
+      method: 'POST', body: JSON.stringify({ shift_date: shiftDate, shift_kind: shiftKind, exact_date: true, reporting_model: reportingModel, crew_ids: tmm ? crewIds : [] }),
     }), onSuccess: onStarted,
   })
-  const disabled = !suggestion || start.isPending || (tmm && crewIds.length === 0)
+  const disabled = !shiftDate || start.isPending
   return <div className="morning-start-report">
     {demoMode ? <div className="morning-demo-banner"><strong>DEMO MODE</strong><span>Nothing you enter in this walkthrough will be saved to Morning.</span></div> : null}
     <div className="morning-start-kicker">{reportingModel === 'construction' ? 'Construction' : 'TMM'} workspace</div>
-    <h2 className="morning-stage-title">Start shift report</h2>
+    <h2 className="morning-stage-title">Choose date and shift</h2><p className="meta">Open an existing draft or submission, or start a new report. Night uses the date it finishes.</p>
     <dl className="morning-start-report-facts">
-      <div className="morning-start-report-fact"><dt>Reporting date</dt><dd>{suggestion ? formatShiftDate(shiftDate) : '…'}</dd></div>
+      <div className="morning-start-report-fact"><dt>Reporting date</dt><dd><label>Shift reporting date<input type="date" value={shiftDate} onChange={e => setSelectedDate(e.target.value)} /></label><small>{shiftDate ? formatShiftDate(shiftDate) : '…'}</small></dd></div>
       <div className="morning-start-report-fact"><dt>Shift</dt><dd><div className="morning-auth-toggle morning-shift-toggle" role="radiogroup" aria-label="Shift"><button type="button" className={shiftKind === 'morning' ? 'active' : ''} onClick={() => setOverride('morning')}>Morning</button><button type="button" className={shiftKind === 'afternoon' ? 'active' : ''} onClick={() => setOverride('afternoon')}>Afternoon</button><button type="button" className={shiftKind === 'night' ? 'active' : ''} onClick={() => setOverride('night')}>Night</button></div></dd></div>
       <div className="morning-start-report-fact"><dt>Supervisor</dt><dd>{supervisor?.display_name || '…'}</dd></div>
       {!tmm ? <div className="morning-start-report-fact"><dt>Crew</dt><dd>{supervisor?.crew_name || 'No Construction crew linked — contact an administrator'}</dd></div> : null}
     </dl>
-    {tmm ? <section className="morning-crew-picker" aria-labelledby="crew-picker-title"><div><h3 id="crew-picker-title">Select crew(s) for this shift</h3><p className="meta">Choose every crew you will supervise. Attendance will combine the personnel assigned to those crews.</p></div><div className="morning-crew-options">{crews.map(crew => <label key={crew.id} className={crewIds.includes(crew.id) ? 'selected' : ''}><input type="checkbox" checked={crewIds.includes(crew.id)} onChange={() => toggleCrew(crew.id)} /><span>{crew.name}</span></label>)}</div>{!crews.length ? <p className="error-text">No TMM crews are available. Add crews in Morning Control Centre first.</p> : <p className="meta">{crewIds.length ? `${crewIds.length} crew${crewIds.length === 1 ? '' : 's'} selected` : 'Select at least one crew to continue.'}</p>}</section> : null}
+    {tmm ? <section className="morning-crew-picker" aria-labelledby="crew-picker-title"><div><h3 id="crew-picker-title">Select crew(s) for this shift</h3><p className="meta">Choose every crew you will supervise. Attendance will combine the personnel assigned to those crews.</p></div><div className="morning-crew-options">{crews.map(crew => <label key={crew.id} className={crewIds.includes(crew.id) ? 'selected' : ''}><input type="checkbox" checked={crewIds.includes(crew.id)} onChange={() => toggleCrew(crew.id)} /><span>{crew.name}</span></label>)}</div>{!crews.length ? <p className="error-text">No TMM crews are available. Add crews in Morning Control Centre first.</p> : <p className="meta">{crewIds.length ? `${crewIds.length} crew${crewIds.length === 1 ? '' : 's'} selected` : 'For a new report, select at least one crew. Existing reports retain their crews.'}</p>}</section> : null}
     {start.isError ? <p className="error-text">{start.error instanceof Error ? start.error.message : 'Could not start the report. Try again.'}</p> : null}
-    <button type="button" className="primary" disabled={disabled} onClick={() => start.mutate()}>{start.isPending ? 'Starting…' : demoMode ? 'Start demo report' : 'Start report'}</button>
+    <button type="button" className="primary" disabled={disabled} onClick={() => start.mutate()}>{start.isPending ? 'Starting…' : demoMode ? 'Start demo report' : 'Open / start report'}</button>
   </div>
 }

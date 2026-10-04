@@ -1,6 +1,6 @@
 import {
   addOfflineMachineState, applyOfflineReportMutation, cacheOfflineData, cacheOfflineSession, clearOfflineDraft, clearOfflineSession,
-  getOfflineData, getOfflineSession, isOfflineReportPending, loadOfflineDraft, offlineDraftById, pendingOfflineDrafts,
+  getOfflineData, getOfflineSession, getOfflinePrincipal, isOfflineReportPending, loadOfflineDraft, offlineDraftById, pendingOfflineDrafts,
   reconcileSyncedDraft, saveOfflineDraft, setOfflinePrincipal, demoWhatsappText,
 } from './offline'
 import type { ReportingModel, ShiftReport } from './types'
@@ -8,6 +8,18 @@ import type { ReportingModel, ShiftReport } from './types'
 let csrfToken: string | null = null
 let syncTimer: number | null = null
 let demoMode = false
+let syncInFlight: Promise<void> | null = null
+let retryDelay = 1500
+const blockedReports = new Set<string>()
+const sending = new Map<string, Promise<ShiftReport>>()
+
+export function resumeOfflineSync(): void {
+  blockedReports.clear()
+  retryDelay = 1500
+  if (syncTimer !== null) { window.clearTimeout(syncTimer); syncTimer = null }
+  void syncOfflineReports()
+}
+
 
 export function setMorningDemoMode(value: boolean) { demoMode = value }
 export function setMorningCsrfToken(token: string | null) { csrfToken = token }
@@ -87,57 +99,117 @@ function cacheSuccess(path: string, body: unknown): unknown {
     if (local?.pending) { scheduleOfflineSync(); return { report: local.report } }
     const report = (body as { report?: ShiftReport | null } | null)?.report
     if (report) saveOfflineDraft(report, false, true); else clearOfflineDraft(model)
-  } else if (looksLikeReport(body)) saveOfflineDraft(body, false)
+  } else if (looksLikeReport(body)) {
+    const pending = pendingOfflineDrafts().find(draft => draft.report.reporting_model === body.reporting_model
+      && draft.report.shift_date === body.shift_date && draft.report.shift_kind === body.shift_kind)
+    if (pending) { scheduleOfflineSync(); return pending.report }
+    saveOfflineDraft(body, false)
+  }
   return body
 }
 
 async function sendSnapshot(report: ShiftReport): Promise<ShiftReport> {
+  const key = `${report.supervisor_principal_id}:${report.id}`
+  const existing = sending.get(key)
+  if (existing) return existing
+  const promise = transmitSnapshot(report).finally(() => sending.delete(key))
+  sending.set(key, promise)
+  return promise
+}
+
+async function transmitSnapshot(report: ShiftReport): Promise<ShiftReport> {
+  const controller = new AbortController()
+  const timeout = window.setTimeout(() => controller.abort(), 15000)
+  try {
   const headers = new Headers({ 'Content-Type': 'application/json' })
   if (csrfToken) headers.set('X-CSRF-Token', csrfToken)
   const response = await fetch('/api/morning/offline-sync', {
-    method: 'POST', headers, credentials: 'include',
+    method: 'POST', headers, credentials: 'include', signal: controller.signal,
     body: JSON.stringify({ report, submit: Boolean(report.offline_submit_pending) }),
   })
   const body = await responseBody(response)
   if (!response.ok) throw apiError(response, body)
   if (!looksLikeReport(body)) throw new Error('Morning returned an invalid synchronization response.')
+  if (body.supervisor_principal_id !== report.supervisor_principal_id || body.shift_date !== report.shift_date
+      || body.shift_kind !== report.shift_kind || body.reporting_model !== report.reporting_model
+      || (body.revision ?? 0) !== (report.revision ?? 0)) throw new Error('Morning returned a receipt for a different report or version.')
+  if (report.offline_submit_pending && (body.status !== 'submitted' || !body.submitted_at)) {
+    throw new Error('Morning has not yet confirmed submission. Retrying…')
+  }
+  const current = offlineDraftById(report.id)
+  if (current && (current.report.updated_at !== report.updated_at || current.report.revision !== report.revision || current.report.offline_submit_pending !== report.offline_submit_pending)) return body
   const synced = { ...body, machine_states: report.machine_states || [], offline_submit_pending: undefined }
+  if (getOfflinePrincipal() !== report.supervisor_principal_id) return body
+  cacheOfflineData(`receipt.${report.reporting_model}.${report.shift_date}.${report.shift_kind}`, synced)
   reconcileSyncedDraft(report.id, synced)
   window.dispatchEvent(new CustomEvent('morning:report-synced', { detail: { report: synced } }))
   return synced
+  } finally { window.clearTimeout(timeout) }
 }
 
 async function refreshSessionForSync(): Promise<boolean> {
   try {
-    const response = await fetch('/api/morning/auth/session', { credentials: 'include' })
+    const response = await fetch('/api/morning/auth/session', { credentials: 'include', signal: AbortSignal.timeout(15000) })
     if (!response.ok) return false
     const body = await responseBody(response) as { authenticated?: boolean; principal?: { principal_id?: string }; csrf_token?: string }
-    if (!body?.authenticated || !body.principal?.principal_id) return false
+    if (!body?.authenticated || !body.principal?.principal_id || body.principal.principal_id !== getOfflinePrincipal()) {
+      window.dispatchEvent(new CustomEvent('morning:sync-failed', { detail: { message: 'Sign in to the report owner’s account to finish sending. Your report remains on this device.' } }))
+      return false
+    }
     setOfflinePrincipal(body.principal.principal_id); cacheOfflineSession(body)
     if (body.csrf_token) csrfToken = body.csrf_token
     return true
   } catch { return false }
 }
 
-export async function syncOfflineReports(): Promise<void> {
-  if (!navigator.onLine || !pendingOfflineDrafts().length) return
-  if (!await refreshSessionForSync()) return
+export function syncOfflineReports(): Promise<void> {
+  if (syncInFlight) return syncInFlight
+  syncInFlight = runOfflineSync().finally(() => { syncInFlight = null })
+  return syncInFlight
+}
+async function runOfflineSync(): Promise<void> {
+  if (demoMode || !navigator.onLine || !pendingOfflineDrafts().length) return
+  if (!await refreshSessionForSync()) { scheduleOfflineSync(); return }
   for (const draft of pendingOfflineDrafts()) {
-    try { await sendSnapshot(draft.report) } catch (error) {
+    if (blockedReports.has(draft.report.id)) continue
+    try {
+      await sendSnapshot(draft.report)
+      retryDelay = 1500
+    } catch (error) {
+      const permanent = error instanceof MorningApiError && error.status >= 400 && error.status < 500 && error.status !== 408 && error.status !== 429
+      if (permanent) blockedReports.add(draft.report.id)
       const message = error instanceof Error ? error.message : 'Local report is still waiting to synchronize.'
       window.dispatchEvent(new CustomEvent('morning:sync-failed', { detail: { message } }))
     }
   }
+  scheduleOfflineSync()
 }
 export function scheduleOfflineSync(): void {
-  if (!navigator.onLine || syncTimer !== null) return
-  syncTimer = window.setTimeout(() => { syncTimer = null; void syncOfflineReports() }, 1200)
+  if (!navigator.onLine || syncTimer !== null || !pendingOfflineDrafts().some(draft => !blockedReports.has(draft.report.id))) return
+  syncTimer = window.setTimeout(() => { syncTimer = null; void syncOfflineReports() }, retryDelay)
+  retryDelay = Math.min(retryDelay * 2, 60000)
 }
 
-function queueBackgroundSnapshot(report: ShiftReport): void {
-  // The generated service worker applies Workbox Background Sync to this endpoint.
-  // Calling it while offline places the latest complete snapshot in that durable queue.
-  void sendSnapshot(report).catch(() => undefined)
+function queueBackgroundSnapshot(_report: ShiftReport): void {
+  scheduleOfflineSync()
+}
+
+export async function submitWithReceipt(report: ShiftReport): Promise<ShiftReport> {
+  if (getOfflinePrincipal() !== report.supervisor_principal_id) throw new Error('Sign in to the report owner’s account before submitting.')
+  cacheOfflineData(`receipt.${report.reporting_model}.${report.shift_date}.${report.shift_kind}`, null)
+  const queued = { ...report, offline_submit_pending: true }
+  saveOfflineDraft(queued, true, true)
+  const saved = offlineDraftById(report.id)
+  if (getOfflinePrincipal() !== report.supervisor_principal_id) throw new Error('Sign in to the report owner’s account before submitting.')
+  if (!saved?.pending || JSON.stringify(saved.report) !== JSON.stringify(queued)) throw new Error('Could not save the submission on this device. Free storage and try again.')
+  blockedReports.delete(report.id)
+  if (navigator.onLine) await syncOfflineReports()
+  const latest = offlineDraftById(report.id)
+  if (latest?.report.status === 'submitted' && latest.report.submitted_at && !latest.pending) return latest.report
+  const receipt = getOfflineData<ShiftReport>(`receipt.${report.reporting_model}.${report.shift_date}.${report.shift_kind}`)
+  if (receipt?.status === 'submitted' && receipt.submitted_at && (receipt.revision ?? 0) === (report.revision ?? 0)) return receipt
+  const current = loadOfflineDraft(report.reporting_model)
+  return latest?.report ?? current?.report ?? queued
 }
 
 export async function morningApi<T = unknown>(path: string, init: RequestInit = {}): Promise<T> {
@@ -145,6 +217,8 @@ export async function morningApi<T = unknown>(path: string, init: RequestInit = 
   if (!headers.has('Content-Type') && init.body) headers.set('Content-Type', 'application/json')
   const method = (init.method || 'GET').toUpperCase()
   if (method !== 'GET' && method !== 'HEAD' && csrfToken) headers.set('X-CSRF-Token', csrfToken)
+  const targetReport = path.match(/^\/api\/morning\/reports\/([^/]+)/)
+  if (targetReport && method !== 'GET' && method !== 'HEAD') headers.set('X-Morning-Report-Revision', String(offlineDraftById(targetReport[1])?.report.revision ?? 0))
   const statePost = path.match(/^\/api\/morning\/reports\/([^/]+)\/machine-states$/)
   const offlineState = () => {
     const payload = init.body && typeof init.body === 'string' ? JSON.parse(init.body) as Record<string, unknown> : {}

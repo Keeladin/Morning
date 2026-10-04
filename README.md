@@ -287,3 +287,13 @@ See:
 - `docs/Morning_Three_Shift_Day_One_2026-09-10.md`
 
 The 28 August extraction contract governs the standalone foundation. The 10 September workflow and three-shift records document later operationally-driven evolution and supersede older staged-workflow or two-shift descriptions where they differ. Additional product-direction material remains under `docs/` as historical design context.
+
+### Date/shift selection, receipts and corrections
+
+Supervisors can choose any valid reporting date and shift. Night is labelled with the date it finishes. An existing non-abandoned report for that supervisor, workspace, date and shift is resumed or opened; its original crew selection is retained. The current clock only supplies a suggestion.
+
+Submit first persists a pending request on the device. Morning retries temporary network/server errors with a delay increasing to 60 seconds, refreshes authentication, and resumes on opening, focus and reconnection. It clears pending submission only after receiving the matching report/version with `status=submitted` and `submitted_at`. Validation or version conflicts stay visible for review; Retry now resumes delivery. Android can suspend the app, so retries while fully closed are not guaranteed. Keep the app's data until receipt is confirmed.
+
+Correct this report opens a correction of the same canonical report. Migration `0010_report_corrections` stores immutable submission snapshots, actor and timestamp in `morning_report_versions`. Daily and weekly views keep the last submitted version while the correction is a draft. Submitting publishes the corrected version and records its receipt; Submission history shows the previous versions and changed sections. A correction is not abandoned as a new report. Old queued snapshots and old clients cannot edit a newer correction revision.
+
+Verification uses an isolated PostgreSQL instance. Run migration downgrade/upgrade tests on an empty separate database: the existing three-shift migration intentionally refuses downgrade while reports exist. The loopback-only `scripts/verify-receipts.mjs` verifies the mobile/desktop correction flow and deliberately loses a server reply after receipt, then checks retry and duplicate prevention against a disposable test deployment and its `receipt-browser` fixture.

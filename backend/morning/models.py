@@ -302,6 +302,8 @@ class ShiftReport:
     construction_work_reviewed_empty: bool = False
     construction_outstanding_reviewed_empty: bool = False
     submitted_at: str | None = None
+    revision: int = 0
+    correction_pending: bool = False
 
     @property
     def shift_id(self) -> str:
@@ -333,6 +335,8 @@ class ShiftReport:
             "construction_work_reviewed_empty": self.construction_work_reviewed_empty,
             "construction_outstanding_reviewed_empty": self.construction_outstanding_reviewed_empty,
             "submitted_at": self.submitted_at,
+            "revision": self.revision,
+            "correction_pending": self.correction_pending,
         }
 
 

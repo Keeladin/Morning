@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Callable
 
 from .accounts import MorningAccounts
@@ -86,18 +86,21 @@ class MorningRuntime:
 
     def start_draft(
         self, supervisor_principal_id: str, *, shift_date: str, shift_kind: str, reporting_model: str = "tmm",
-        crew_ids: tuple[str, ...] = (),
+        crew_ids: tuple[str, ...] = (), exact_date: bool = False,
     ) -> ShiftReport:
         if shift_kind not in SHIFT_KINDS:
             raise MorningError(f"unsupported shift kind: {shift_kind}")
         if reporting_model not in REPORTING_MODELS:
             raise MorningError(f"unsupported reporting model: {reporting_model}")
-        requested = normalize_shift_override(
-            self.current_shift(),
-            ShiftIdentity(shift_date=shift_date, shift_kind=shift_kind),
-        )
+        date.fromisoformat(shift_date)
+        requested = ShiftIdentity(shift_date=shift_date, shift_kind=shift_kind)
+        if not exact_date:
+            requested = normalize_shift_override(self.current_shift(), requested)
         shift_date = requested.shift_date
         shift_kind = requested.shift_kind
+        existing = self.store.report_for_slot(supervisor_principal_id, shift_date, shift_kind, reporting_model)
+        if existing:
+            return existing
         selected_crews: tuple[str, ...] = ()
         if reporting_model == "tmm":
             selected_crews = tuple(dict.fromkeys(str(item).strip() for item in crew_ids if str(item).strip()))
@@ -118,17 +121,28 @@ class MorningRuntime:
             crew_id=crew_id, reporting_model=reporting_model, crew_ids=selected_crews,
         )
 
-    @staticmethod
-    def _snapshot_hhmm(value: object) -> str:
+    def _snapshot_hhmm(self, value: object) -> str:
         text = str(value or "").strip()
         if re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", text):
             return text
         try:
-            return datetime.fromisoformat(text).strftime("%H:%M")
+            moment = datetime.fromisoformat(text)
+            if moment.tzinfo is not None:
+                moment = moment.astimezone(require_zone(self.shift_policy().timezone))
+            return moment.strftime("%H:%M")
         except (TypeError, ValueError) as exc:
             raise MorningError("offline machine-event time must be HH:MM or ISO timestamp") from exc
 
     def sync_offline_snapshot(
+        self, supervisor_principal_id: str, snapshot: dict[str, Any], *, submit: bool = False
+    ) -> ShiftReport:
+        # A retry and a correction must never interleave half-applied snapshots.
+        with self.store._db() as db:
+            slot = f"{supervisor_principal_id}:{snapshot.get('reporting_model')}:{snapshot.get('shift_date')}:{snapshot.get('shift_kind')}"
+            db.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (slot,))
+            return self._sync_offline_snapshot(supervisor_principal_id, snapshot, submit=submit)
+
+    def _sync_offline_snapshot(
         self, supervisor_principal_id: str, snapshot: dict[str, Any], *, submit: bool = False
     ) -> ShiftReport:
         shift_date = str(snapshot.get("shift_date") or "")
@@ -137,8 +151,14 @@ class MorningRuntime:
         crew_ids = tuple(str(item) for item in (snapshot.get("crew_ids") or []) if str(item))
         report = self.start_draft(
             supervisor_principal_id, shift_date=shift_date, shift_kind=shift_kind, reporting_model=reporting_model,
-            crew_ids=crew_ids,
+            crew_ids=crew_ids, exact_date=True,
         )
+        with self.store._db() as db:
+            db.execute("SELECT id FROM morning_reports WHERE id=%s FOR UPDATE", (report.id,))
+        report = self.store.get_report(report.id)
+        expected_revision = int(snapshot.get("revision") or 0)
+        if report.revision != expected_revision:
+            raise MorningError("report version changed; reopen the report before sending")
         # Background Sync may have completed while the app was closed. In that case
         # the submitted server copy is already authoritative and is safe to return.
         if report.status == "submitted":
@@ -218,7 +238,7 @@ class MorningRuntime:
         ) for raw in (snapshot.get("other_activities") or []))
 
         report = self.store.replace_report_snapshot(
-            report.id, attendance=attendance, stop_fix=tuple(stop_fix), cards=tuple(cards),
+            report.id, expected_revision=expected_revision, attendance=attendance, stop_fix=tuple(stop_fix), cards=tuple(cards),
             machine_events=tuple(machine_events), construction_work=tuple(construction_work), other_activities=other_activities,
             brothers_keeper=(str(snapshot.get("brothers_keeper") or "").strip() or None),
             safety_reviewed_empty=bool(snapshot.get("safety_reviewed_empty")) and not (stop_fix or cards),
@@ -255,7 +275,7 @@ class MorningRuntime:
             ))
             existing_state_ids.add(declaration_id)
 
-        return self.store.submit_report(report.id) if submit else report
+        return self.store.submit_report(report.id, expected_revision=expected_revision) if submit else report
 
     def abandon_draft(self, report_id: str) -> ShiftReport:
         return self.store.abandon_report(report_id)
@@ -559,7 +579,7 @@ class MorningRuntime:
             raise MorningError("assigned person must be an active person registered under TMM")
 
     def whatsapp_text(self, report_id: str) -> str:
-        report = self.store.get_report(report_id)
+        report = self.store.published_report(report_id)
         supervisor = self.store.principal_by_id(report.supervisor_principal_id)
         supervisor_name = supervisor["display_name"] if supervisor is not None else report.supervisor_principal_id
         persons_by_id = {person.id: person for person in self.store.list_persons()}
@@ -576,7 +596,7 @@ class MorningRuntime:
             persons_by_id=persons_by_id,
             machines_by_id=machines_by_id,
             timezone=self.shift_policy().timezone,
-            machine_states=self.store.list_machine_states(report_id=report_id),
+            machine_states=self.store.published_machine_states(report_id),
             construction_crew=construction_crew,
         )
 
@@ -618,12 +638,12 @@ class MorningRuntime:
 
     def daily_bundle(self, reporting_date: str, *, require_control_room: bool = True) -> ReportBundle:
         reports = tuple(
-            report for report in self.store.list_reports(shift_date=reporting_date)
+            report for report in self.store.list_reports(shift_date=reporting_date, status="submitted")
             if report.status == "submitted" and report.reporting_model == "tmm"
         )
         observations = self.store.list_observations(reporting_date=reporting_date)
         machine_states = tuple(
-            state for report in reports for state in self.store.list_machine_states(report_id=report.id)
+            state for report in reports for state in self.store.published_machine_states(report.id)
         )
         machines_by_id = {machine.id: machine for machine in self.store.list_machines()}
         persons_by_id = {person.id: person for person in self.store.list_persons()}

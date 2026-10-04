@@ -18,19 +18,7 @@ export default defineConfig({
     workbox: {
       globPatterns: ['**/*.{js,css,html,png,svg,woff2}'],
       navigateFallback: '/index.html',
-      runtimeCaching: [
-        {
-          urlPattern: /\/api\/morning\/offline-sync$/,
-          method: 'POST',
-          handler: 'NetworkOnly',
-          options: {
-            backgroundSync: {
-              name: 'morning-report-sync',
-              options: { maxRetentionTime: 24 * 60 },
-            },
-          },
-        },
-      ],
+
     },
   })],
   esbuild: {

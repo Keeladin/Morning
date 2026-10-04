@@ -427,3 +427,91 @@ def test_construction_offline_snapshot_sync(runtime) -> None:
     assert synced.construction_work[0].level == "813S"
     assert synced.construction_work[0].location == "T97"
     assert "813L South · T97" in app.whatsapp_text(synced.id)
+
+
+def _ready_report(app, store, supervisor, *, shift_date="2026-10-02"):
+    crew = store.create_crew(name="Receipt Crew")
+    person = store.create_person(name="Reporter", employee_number=None, role="Supervisor", crew_id=crew.id)
+    store.link_account_person(supervisor.principal_id, person.id)
+    report = app.start_draft(supervisor.principal_id, shift_date=shift_date, shift_kind="morning", crew_ids=(crew.id,), exact_date=True)
+    app.set_attendance(report.id, (AttendanceEntry(person.id, True),))
+    app.set_brothers_keeper(report.id, "Original safety contribution")
+    for section in ("safety", "machine_activity", "other_activities"):
+        app.set_empty_section_reviewed(report.id, section=section, reviewed=True)
+    return store.get_report(report.id)
+
+
+def test_explicit_slot_ignores_clock_and_resumes_without_crew_selection(runtime):
+    app, store, supervisor = runtime
+    report = _ready_report(app, store, supervisor, shift_date="2026-03-26")
+    assert report.shift_date == "2026-03-26"
+    assert report.status == "draft"
+    assert app.start_draft(supervisor.principal_id, shift_date=report.shift_date, shift_kind="morning", exact_date=True).id == report.id
+    submitted = app.submit_report(report.id)
+    assert app.start_draft(supervisor.principal_id, shift_date=report.shift_date, shift_kind="morning", exact_date=True).status == "submitted"
+    assert app.submit_report(report.id).submitted_at == submitted.submitted_at
+
+
+def test_correction_preserves_published_report_and_rejects_old_replay(runtime):
+    app, store, supervisor = runtime
+    report = _ready_report(app, store, supervisor)
+    original = app.submit_report(report.id)
+    correction = store.begin_correction(report.id)
+    assert correction.id == original.id
+    assert correction.status == "draft" and correction.correction_pending
+    assert correction.revision == 1
+    assert store.begin_correction(report.id).revision == 1
+    app.set_brothers_keeper(report.id, "Corrected safety contribution")
+    assert store.published_report(report.id).brothers_keeper == original.brothers_keeper
+    assert app.daily_shift_reports("2026-10-02")[0].brothers_keeper == original.brothers_keeper
+    assert original.brothers_keeper in app.whatsapp_text(report.id)
+    with pytest.raises(MorningError, match="version changed"):
+        app.sync_offline_snapshot(supervisor.principal_id, original.as_dict(), submit=True)
+    with pytest.raises(InvalidTransitionError):
+        store.abandon_report(report.id)
+    updated = app.submit_report(report.id)
+    assert updated.status == "submitted" and not updated.correction_pending
+    assert updated.brothers_keeper == "Corrected safety contribution"
+    assert app.daily_shift_reports("2026-10-02")[0].brothers_keeper == updated.brothers_keeper
+    versions = store.report_versions(report.id)
+    assert [v["revision"] for v in versions] == [0, 1]
+    assert versions[0]["snapshot"]["brothers_keeper"] == original.brothers_keeper
+    assert versions[1]["snapshot"]["brothers_keeper"] == updated.brothers_keeper
+    assert all(v["actor_id"] == supervisor.principal_id for v in versions)
+
+
+def test_lost_submission_reply_can_be_retried_without_duplicate(runtime):
+    from concurrent.futures import ThreadPoolExecutor
+    app, store, supervisor = runtime
+    report = _ready_report(app, store, supervisor)
+    snapshot = report.as_dict()
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda _: app.sync_offline_snapshot(supervisor.principal_id, snapshot, submit=True), range(2)))
+    assert results[0].id == results[1].id == report.id
+    assert results[0].submitted_at == results[1].submitted_at
+    assert len(store.list_reports(status="submitted")) == 1
+    assert len(store.report_versions(report.id)) == 1
+
+
+def test_invalid_submission_snapshot_rolls_back_changes(runtime):
+    app, store, supervisor = runtime
+    report = _ready_report(app, store, supervisor)
+    bad = report.as_dict()
+    bad["brothers_keeper"] = ""
+    with pytest.raises(IncompleteReportError):
+        app.sync_offline_snapshot(supervisor.principal_id, bad, submit=True)
+    assert store.get_report(report.id).brothers_keeper == report.brothers_keeper
+    assert store.get_report(report.id).status == "draft"
+
+
+def test_receipt_snapshot_preserves_server_event_times(runtime):
+    app, store, supervisor = runtime
+    report = _ready_report(app, store, supervisor)
+    machine = store.create_machine(machine_id="TIME CHECK", machine_type="LHD", section=None)
+    person = store.list_persons()[0]
+    app.add_machine_event(report.id, machine_id=machine.id, start_hhmm="08:00", end_hhmm="08:15", issue="Time check", person_id=person.id)
+    before = store.get_report(report.id)
+    assert before.machine_events[0].start_time.startswith("2026-10-02T06:00")
+    submitted = app.sync_offline_snapshot(supervisor.principal_id, before.as_dict(), submit=True)
+    assert submitted.machine_events[0].start_time == before.machine_events[0].start_time
+    assert submitted.machine_events[0].end_time == before.machine_events[0].end_time

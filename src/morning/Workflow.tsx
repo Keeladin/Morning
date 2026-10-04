@@ -57,6 +57,7 @@ export function Workflow({ principal, reportingModel = 'tmm' }: { principal: Mor
   const [stage, setStage] = useState<Stage>('attendance')
   const [surface, setSurface] = useState<'home' | 'report'>(construction ? 'report' : 'home')
   const [sync, setSync] = useState<SyncState>({ status: navigator.onLine ? 'idle' : 'offline' })
+  const [selectingSlot, setSelectingSlot] = useState(false)
   const [resumed, setResumed] = useState(false)
   const initializedReport = useRef('')
   const queryClient = useQueryClient()
@@ -88,8 +89,7 @@ export function Workflow({ principal, reportingModel = 'tmm' }: { principal: Mor
     const synced = (event: Event) => {
       const updated = (event as CustomEvent<{ report: ShiftReport }>).detail?.report
       if (!updated || updated.reporting_model !== reportingModel) return
-      refreshReport(updated); setSync({ status: 'saved', message: 'Local changes synchronized with Morning.' })
-      void queryClient.invalidateQueries({ queryKey: ['morning-draft', reportingModel] })
+      if (!report || (updated.shift_date === report.shift_date && updated.shift_kind === report.shift_kind)) refreshReport(updated); setSync({ status: 'saved', message: updated.status === 'submitted' && updated.submitted_at ? `Received by Morning at ${new Date(updated.submitted_at).toLocaleString()}.` : 'Local changes synchronized with Morning.' }); void queryClient.invalidateQueries({ queryKey: ['morning-daily-reports'] }); void queryClient.invalidateQueries({ queryKey: ['morning-home'] })
     }
     const failed = (event: Event) => {
       const message = (event as CustomEvent<{ message?: string }>).detail?.message
@@ -101,7 +101,7 @@ export function Workflow({ principal, reportingModel = 'tmm' }: { principal: Mor
       window.removeEventListener('online', online); window.removeEventListener('offline', offline)
       window.removeEventListener('morning:report-synced', synced); window.removeEventListener('morning:sync-failed', failed)
     }
-  }, [reportingModel])
+  }, [reportingModel, report?.id])
   useEffect(() => {
     if (report && isOfflineReportPending(report.id)) {
       setSync({ status: 'offline', message: navigator.onLine ? 'Saved locally — waiting to synchronize with Morning.' : 'Working offline — changes are saved on this device and will synchronize automatically.' })
@@ -119,14 +119,15 @@ export function Workflow({ principal, reportingModel = 'tmm' }: { principal: Mor
   const confirmAndAbandon = () => { if (report && window.confirm('Abandon this draft? You will not be able to resume it.')) abandon.mutate() }
   if (shiftQuery.isError || draftQuery.isError) return <div className="offline-banner">Could not reach Morning. Check your connection.</div>
   if (shiftQuery.isLoading || draftQuery.isLoading || meQuery.isLoading) return <p className="morning-loading">Loading your shift…</p>
-  if (!construction && surface === 'home') return <Home principal={principal} hasDraft={Boolean(report?.status === 'draft')} demoMode={Boolean(principal.demo_mode)} onOpenReport={() => setSurface('report')} />
-  if (!report) return <div className="morning-workflow"><StartReport suggestion={shiftQuery.data} supervisor={meQuery.data} crews={crews} reportingModel={reportingModel} demoMode={Boolean(principal.demo_mode)} onStarted={started => queryClient.setQueryData(['morning-draft', reportingModel], { report: started })} /></div>
-  if (report.status === 'submitted') return <div className="morning-workflow"><ReviewStage report={report} machines={machines} people={reportPeople} principal={principal} submitted onHome={!construction ? () => setSurface('home') : undefined} /></div>
+  if (!construction && surface === 'home') return <Home principal={principal} hasDraft={Boolean(report?.status === 'draft')} demoMode={Boolean(principal.demo_mode)} onOpenReport={() => setSurface('report')} onNewReport={() => { setSelectingSlot(true); setSurface('report') }} />
+  if (!report || selectingSlot) return <div className="morning-workflow"><StartReport suggestion={shiftQuery.data} supervisor={meQuery.data} crews={crews} reportingModel={reportingModel} demoMode={Boolean(principal.demo_mode)} onStarted={started => { refreshReport(started); setSelectingSlot(false); initializedReport.current = ''; setStage('attendance') }} /></div>
+  if (report.status === 'submitted') return <div className="morning-workflow"><ReviewStage report={report} machines={machines} people={reportPeople} principal={principal} submitted onSelect={() => setSelectingSlot(true)} onCorrect={refreshReport} onHome={!construction ? () => setSurface('home') : undefined} /></div>
 
   return <div className={construction ? 'morning-workflow construction-workflow' : 'morning-workflow'}>
     {principal.demo_mode ? <div className="morning-demo-banner"><strong>DEMO MODE</strong><span>Walk through the real workflow — nothing in this report will be saved to production.</span></div> : null}
     {construction ? <div className="construction-workspace-strip"><span>Morning / Construction</span><strong>Shift reporting</strong></div> : null}
-    <div className="morning-shift-banner"><div className="morning-shift-banner-info"><strong>{shiftLabel(report.shift_kind)}</strong><span>{report.shift_date}{!construction && selectedCrewNames.length ? ` · ${selectedCrewNames.join(' + ')}` : ''}</span></div><div className="morning-shift-actions">{!construction ? <button type="button" className="ghost" onClick={() => setSurface('home')}>Home</button> : null}<button type="button" className="ghost" onClick={confirmAndAbandon} disabled={abandon.isPending}>Abandon draft</button></div></div>
+    <div className="morning-shift-banner"><div className="morning-shift-banner-info"><strong>{shiftLabel(report.shift_kind)}</strong><span>{report.shift_date}{!construction && selectedCrewNames.length ? ` · ${selectedCrewNames.join(' + ')}` : ''}</span></div><div className="morning-shift-actions">{!construction ? <button type="button" className="ghost" onClick={() => setSurface('home')}>Home</button> : null}<button type="button" className="ghost" onClick={() => setSelectingSlot(true)}>Choose date / shift</button>{!report.correction_pending ? <button type="button" className="ghost" onClick={confirmAndAbandon} disabled={abandon.isPending}>Abandon draft</button> : null}</div></div>
+    {report.correction_pending ? <p className="morning-resumed">Editing correction · the last submitted version remains in daily reports until you submit this correction.</p> : null}
     {resumed ? <p className="morning-resumed">Draft resumed · last saved {new Date(report.updated_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p> : null}
     <SyncIndicator state={sync} lastSaved={report.updated_at} />
     <div className={`morning-stepper ${construction ? 'five' : 'six'}`} aria-label="Report progress">{stages.map((item, index) => <button type="button" key={item} disabled={item !== stage && !completion?.[item]} onClick={() => setStage(item)} className={['morning-step', item === stage ? 'active' : '', completion?.[item] ? 'done' : ''].filter(Boolean).join(' ')}><span>{index + 1}</span><small>{STEP_LABELS[item]}</small></button>)}</div>

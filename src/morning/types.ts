@@ -44,6 +44,7 @@ export type ShiftReport = {
   brothers_keeper: string | null
   safety_reviewed_empty: boolean; machine_activity_reviewed_empty: boolean; other_activities_reviewed_empty: boolean
   construction_work_reviewed_empty: boolean; construction_outstanding_reviewed_empty: boolean
+  revision?: number; correction_pending?: boolean
   offline_submit_pending?: boolean
 }
 

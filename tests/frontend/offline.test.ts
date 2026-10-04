@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { morningApi, syncOfflineReports } from '../../src/morning/api'
+import { morningApi, syncOfflineReports, submitWithReceipt, resumeOfflineSync } from '../../src/morning/api'
 import { cacheOfflineData, loadOfflineDraft, offlineDraftById, pendingOfflineDrafts, saveOfflineDraft, setOfflinePrincipal } from '../../src/morning/offline'
 import type { MachineStateDeclaration, ShiftReport, SupervisorContext } from '../../src/morning/types'
 
 afterEach(() => {
   localStorage.clear()
+  vi.useRealTimers()
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
 })
@@ -184,4 +185,103 @@ describe('offline shift capture', () => {
     expect(loadOfflineDraft('tmm')).toBeNull()
   })
 
+})
+
+
+function receiptDraft(id: string): ShiftReport {
+  return {
+    id, shift_date: '2026-10-02', shift_kind: 'morning', shift_id: '2026-10-02:morning',
+    supervisor_principal_id: 'receipt-owner', crew_id: 'crew-1', crew_ids: ['crew-1'], reporting_model: 'tmm',
+    status: 'draft', attendance: [], stop_fix: [], cards: [], machine_events: [], construction_work: [], other_activities: [],
+    brothers_keeper: 'Safety', created_at: '2026-10-02T10:00:00Z', updated_at: '2026-10-02T12:00:00Z', submitted_at: null,
+    safety_reviewed_empty: true, machine_activity_reviewed_empty: true, other_activities_reviewed_empty: true,
+    construction_work_reviewed_empty: false, construction_outstanding_reviewed_empty: false, revision: 0,
+  }
+}
+function sessionReply() { return new Response(JSON.stringify({ authenticated: true, principal: { principal_id: 'receipt-owner' }, csrf_token: 'fresh-token' })) }
+
+describe('confirmed submission queue', () => {
+  it('keeps a submission pending when the server only returns a draft', async () => {
+    vi.useFakeTimers(); setOfflinePrincipal('receipt-owner')
+    vi.spyOn(window.navigator, 'onLine', 'get').mockReturnValue(true)
+    const draft = receiptDraft('draft-ack')
+    vi.stubGlobal('fetch', vi.fn(async (path: string) => path.includes('auth/session') ? sessionReply() : new Response(JSON.stringify(draft))))
+    const result = await submitWithReceipt(draft)
+    expect(result.status).toBe('draft')
+    expect(result.offline_submit_pending).toBe(true)
+    expect(pendingOfflineDrafts()).toHaveLength(1)
+  })
+
+  it('retries a server failure automatically and accepts a confirmed receipt', async () => {
+    vi.useFakeTimers(); resumeOfflineSync(); await syncOfflineReports(); setOfflinePrincipal('receipt-owner')
+    vi.spyOn(window.navigator, 'onLine', 'get').mockReturnValue(true)
+    const draft = receiptDraft('automatic-retry')
+    let attempts = 0
+    vi.stubGlobal('fetch', vi.fn(async (path: string) => {
+      if (path.includes('auth/session')) return sessionReply()
+      attempts++
+      return attempts === 1 ? new Response(JSON.stringify({ error: 'temporary outage' }), { status: 503 })
+        : new Response(JSON.stringify({ ...draft, status: 'submitted', submitted_at: '2026-10-04T06:44:54Z' }))
+    }))
+    expect((await submitWithReceipt(draft)).offline_submit_pending).toBe(true)
+    await vi.advanceTimersByTimeAsync(1500)
+    expect(attempts).toBe(2)
+    expect(pendingOfflineDrafts()).toHaveLength(0)
+    expect(offlineDraftById(draft.id)?.report.submitted_at).toBe('2026-10-04T06:44:54Z')
+  })
+
+  it('survives a lost response and reconciles a temporary id on retry', async () => {
+    vi.useFakeTimers(); resumeOfflineSync(); await syncOfflineReports(); setOfflinePrincipal('receipt-owner')
+    vi.spyOn(window.navigator, 'onLine', 'get').mockReturnValue(true)
+    const draft = receiptDraft('offline_report_lost-response')
+    let attempts = 0
+    vi.stubGlobal('fetch', vi.fn(async (path: string) => {
+      if (path.includes('auth/session')) return sessionReply()
+      attempts++
+      if (attempts === 1) throw new TypeError('reply lost after server saved')
+      return new Response(JSON.stringify({ ...draft, id: 'canonical-id', status: 'submitted', submitted_at: '2026-10-04T06:44:54Z' }))
+    }))
+    await submitWithReceipt(draft)
+    await vi.advanceTimersByTimeAsync(1500)
+    expect(offlineDraftById(draft.id)).toBeNull()
+    expect(offlineDraftById('canonical-id')?.report.status).toBe('submitted')
+    expect(pendingOfflineDrafts()).toHaveLength(0)
+  })
+
+  it('does not send another owner’s report after the session changes', async () => {
+    vi.useFakeTimers(); resumeOfflineSync(); await syncOfflineReports(); setOfflinePrincipal('receipt-owner')
+    vi.spyOn(window.navigator, 'onLine', 'get').mockReturnValue(true)
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ authenticated: true, principal: { principal_id: 'different-owner' } })))
+    vi.stubGlobal('fetch', fetchMock)
+    const result = await submitWithReceipt(receiptDraft('owner-mismatch'))
+    expect(result.offline_submit_pending).toBe(true)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(pendingOfflineDrafts()).toHaveLength(1)
+  })
+
+  it('pauses validation failures until retry is requested, retaining the report', async () => {
+    vi.useFakeTimers(); resumeOfflineSync(); await syncOfflineReports(); setOfflinePrincipal('receipt-owner')
+    vi.spyOn(window.navigator, 'onLine', 'get').mockReturnValue(true)
+    let attempts = 0
+    vi.stubGlobal('fetch', vi.fn(async (path: string) => {
+      if (path.includes('auth/session')) return sessionReply()
+      attempts++
+      return new Response(JSON.stringify({ error: 'attendance incomplete' }), { status: 409 })
+    }))
+    await submitWithReceipt(receiptDraft('validation-blocked'))
+    await vi.advanceTimersByTimeAsync(120000)
+    expect(attempts).toBe(1)
+    expect(pendingOfflineDrafts()).toHaveLength(1)
+  })
+})
+
+
+it('resumes a locally queued slot instead of creating an offline duplicate', async () => {
+  makeOffline(); setOfflinePrincipal('receipt-owner')
+  cacheOfflineData('me', { principal_id: 'receipt-owner', display_name: 'Reporter', role: 'supervisor', crew_id: 'crew-1', crew_name: 'Crew' })
+  const existing = receiptDraft('offline_report_existing')
+  saveOfflineDraft(existing, true, true)
+  const result = await morningApi<ShiftReport>('/api/morning/draft', { method: 'POST', body: JSON.stringify({ shift_date: existing.shift_date, shift_kind: existing.shift_kind, reporting_model: 'tmm' }) })
+  expect(result.id).toBe(existing.id)
+  expect(pendingOfflineDrafts()).toHaveLength(1)
 })

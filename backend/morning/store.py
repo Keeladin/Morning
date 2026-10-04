@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
+from contextvars import ContextVar
+from dataclasses import fields
+from psycopg.types.json import Jsonb
 from datetime import date, datetime, time
 import re
 from typing import Any, Iterator
@@ -96,15 +99,24 @@ class MorningStore:
             raise ValueError("database_url is required")
         self.database_url = database_url
         self._dsn = _psycopg_dsn(database_url)
+        self._active_db = ContextVar("morning_transaction", default=None)
 
     def _connect(self) -> Connection[dict[str, Any]]:
         return psycopg.connect(self._dsn, row_factory=dict_row)
 
     @contextmanager
     def _db(self) -> Iterator[Connection[dict[str, Any]]]:
+        active = self._active_db.get()
+        if active is not None:
+            yield active
+            return
         with self._connect() as db:
             with db.transaction():
-                yield db
+                token = self._active_db.set(db)
+                try:
+                    yield db
+                finally:
+                    self._active_db.reset(token)
 
     # -- principals -------------------------------------------------------
 
@@ -921,19 +933,13 @@ class MorningStore:
                     (row_id, shift_date, shift_kind, supervisor_principal_id, crew_id, reporting_model),
                 )
                 row = db.execute(
-                    """SELECT id FROM morning_reports
+                    """SELECT id, crew_id FROM morning_reports
                        WHERE shift_date=%s AND shift_kind=%s AND supervisor_principal_id=%s
                          AND reporting_model=%s AND status <> 'abandoned'""",
                     (shift_date, shift_kind, supervisor_principal_id, reporting_model),
                 ).fetchone()
                 if row is not None:
-                    existing_ids = self._report_crew_ids(db, row["id"], crew_id)
-                    requested_ids = tuple(crew_ids) or ((crew_id,) if crew_id else ())
                     report_exists = row["id"] != row_id
-                    if report_exists and requested_ids and existing_ids != requested_ids:
-                        raise MorningError(
-                            "an existing draft already owns a different crew selection; continue that draft or abandon it first"
-                        )
                     if not report_exists and crew_ids:
                         with db.cursor() as cursor:
                             cursor.executemany(
@@ -945,6 +951,67 @@ class MorningStore:
         if row is None:
             raise MorningError("could not create or resolve shift report")
         return self._load_report(row["id"])
+
+    def report_for_slot(self, supervisor_principal_id: str, shift_date: str, shift_kind: str, reporting_model: str) -> ShiftReport | None:
+        with self._db() as db:
+            row = db.execute(
+                "SELECT id FROM morning_reports WHERE supervisor_principal_id=%s AND shift_date=%s AND shift_kind=%s AND reporting_model=%s AND status <> 'abandoned'",
+                (supervisor_principal_id, shift_date, shift_kind, reporting_model),
+            ).fetchone()
+        return self.get_report(row["id"]) if row else None
+
+    @staticmethod
+    def _report_from_snapshot(snapshot: dict[str, Any]) -> ShiftReport:
+        data = {key: value for key, value in snapshot.items() if key in {field.name for field in fields(ShiftReport)}}
+        for key, cls in (("attendance", AttendanceEntry), ("stop_fix", StopFixRecord), ("cards", CardObservation),
+                         ("machine_events", MachineEvent), ("construction_work", ConstructionWorkItem), ("other_activities", OtherActivity)):
+            data[key] = tuple(cls(**item) for item in data[key])
+        data["crew_ids"] = tuple(data.get("crew_ids") or ())
+        return ShiftReport(**data)
+
+    def published_report(self, report_id: str) -> ShiftReport:
+        report = self.get_report(report_id)
+        if report.correction_pending:
+            with self._db() as db:
+                row = db.execute("SELECT snapshot FROM morning_report_versions WHERE report_id=%s ORDER BY revision DESC LIMIT 1", (report_id,)).fetchone()
+            if row:
+                return self._report_from_snapshot(row["snapshot"])
+        return report
+
+    def published_machine_states(self, report_id: str) -> tuple[MachineStateDeclaration, ...]:
+        report = self.get_report(report_id)
+        if report.correction_pending:
+            with self._db() as db:
+                row = db.execute("SELECT snapshot FROM morning_report_versions WHERE report_id=%s ORDER BY revision DESC LIMIT 1", (report_id,)).fetchone()
+            if row:
+                return tuple(MachineStateDeclaration(**item) for item in row["snapshot"].get("machine_states", []))
+        return self.list_machine_states(report_id=report_id)
+
+    def _archive_report(self, db, report: ShiftReport) -> None:
+        snapshot = report.as_dict()
+        snapshot["machine_states"] = [item.as_dict() for item in self.list_machine_states(report_id=report.id)]
+        db.execute(
+            "INSERT INTO morning_report_versions (report_id, revision, actor_id, snapshot) VALUES (%s,%s,%s,%s) ON CONFLICT DO NOTHING",
+            (report.id, report.revision, report.supervisor_principal_id, Jsonb(snapshot)),
+        )
+
+    def begin_correction(self, report_id: str) -> ShiftReport:
+        with self._db() as db:
+            row = db.execute("SELECT * FROM morning_reports WHERE id=%s FOR UPDATE", (report_id,)).fetchone()
+            if row is None:
+                raise UnknownRecordError(f"unknown shift report: {report_id}")
+            if row["correction_pending"]:
+                return self._load_report(report_id, db=db)
+            if row["status"] != "submitted":
+                raise InvalidTransitionError("only a submitted report can be corrected")
+            self._archive_report(db, self._load_report(report_id, db=db))
+            db.execute("UPDATE morning_reports SET status='draft', correction_pending=true, revision=revision+1, updated_at=CURRENT_TIMESTAMP WHERE id=%s", (report_id,))
+        return self.get_report(report_id)
+
+    def report_versions(self, report_id: str) -> tuple[dict[str, Any], ...]:
+        with self._db() as db:
+            rows = db.execute("SELECT revision, actor_id, recorded_at, snapshot FROM morning_report_versions WHERE report_id=%s ORDER BY revision", (report_id,)).fetchall()
+        return tuple(_json_safe_row(row) for row in rows)
 
     def current_draft(self, supervisor_principal_id: str, *, reporting_model: str | None = None) -> ShiftReport | None:
         model_clause = " AND reporting_model=%s" if reporting_model is not None else ""
@@ -974,7 +1041,7 @@ class MorningStore:
             clauses.append("shift_date=%s")
             args.append(shift_date)
         if status is not None:
-            clauses.append("status=%s")
+            clauses.append("(status=%s OR correction_pending=true)" if status == "submitted" else "status=%s")
             args.append(status)
         if supervisor_principal_id is not None:
             clauses.append("supervisor_principal_id=%s")
@@ -985,22 +1052,22 @@ class MorningStore:
                 f"SELECT id FROM morning_reports{where} ORDER BY shift_date DESC, shift_kind, created_at DESC",
                 args,
             ).fetchall()
-        return tuple(self._load_report(row["id"]) for row in rows)
+        return tuple((self.published_report if status == "submitted" else self._load_report)(row["id"]) for row in rows)
 
     def list_recent_submitted_reports(self, *, reporting_model: str = "tmm", limit: int = 5) -> tuple[ShiftReport, ...]:
         with self._db() as db:
             rows = db.execute(
-                """SELECT id FROM morning_reports WHERE status='submitted' AND reporting_model=%s
+                """SELECT id FROM morning_reports WHERE (status='submitted' OR correction_pending=true) AND reporting_model=%s
                    ORDER BY submitted_at DESC NULLS LAST, shift_date DESC, created_at DESC LIMIT %s""",
                 (reporting_model, max(1, min(limit, 20))),
             ).fetchall()
-        return tuple(self._load_report(row["id"]) for row in rows)
+        return tuple(self.published_report(row["id"]) for row in rows)
 
     def list_submitted_reporting_dates(self, *, reporting_model: str = "tmm") -> tuple[str, ...]:
         with self._db() as db:
             rows = db.execute(
                 """SELECT DISTINCT shift_date FROM morning_reports
-                   WHERE status='submitted' AND reporting_model=%s
+                   WHERE (status='submitted' OR correction_pending=true) AND reporting_model=%s
                    ORDER BY shift_date DESC""",
                 (reporting_model,),
             ).fetchall()
@@ -1059,9 +1126,12 @@ class MorningStore:
         other_activities_reviewed_empty: bool,
         construction_work_reviewed_empty: bool,
         construction_outstanding_reviewed_empty: bool,
+        expected_revision: int | None = None,
     ) -> ShiftReport:
         with self._db() as db:
-            self._require_draft(db, report_id)
+            row = self._require_draft(db, report_id)
+            if expected_revision is not None and row["revision"] != expected_revision:
+                raise InvalidTransitionError("report version changed; reopen the report before sending")
             for table in (
                 "morning_attendance", "morning_stop_fix", "morning_cards", "morning_machine_events",
                 "morning_construction_work", "morning_other_activities",
@@ -1303,8 +1373,15 @@ class MorningStore:
             self._touch_report(db, report_id)
         return self._load_report(report_id)
 
-    def submit_report(self, report_id: str) -> ShiftReport:
+    def submit_report(self, report_id: str, *, expected_revision: int | None = None) -> ShiftReport:
         with self._db() as db:
+            report = db.execute("SELECT * FROM morning_reports WHERE id=%s FOR UPDATE", (report_id,)).fetchone()
+            if report is None:
+                raise UnknownRecordError(f"unknown shift report: {report_id}")
+            if expected_revision is not None and report["revision"] != expected_revision:
+                raise InvalidTransitionError("report version changed; reopen the report before sending")
+            if report["status"] == "submitted":
+                return self._load_report(report_id, db=db)
             report = self._require_draft(db, report_id)
             attendance_ids = {
                 row["person_id"] for row in db.execute(
@@ -1355,23 +1432,26 @@ class MorningStore:
             if missing:
                 raise IncompleteReportError(tuple(missing))
             db.execute(
-                """UPDATE morning_reports SET status='submitted', submitted_at=CURRENT_TIMESTAMP,
+                """UPDATE morning_reports SET status='submitted', correction_pending=false, submitted_at=CURRENT_TIMESTAMP,
                    updated_at=CURRENT_TIMESTAMP WHERE id=%s""",
                 (report_id,),
             )
+            self._archive_report(db, self._load_report(report_id, db=db))
         return self._load_report(report_id)
 
     def abandon_report(self, report_id: str) -> ShiftReport:
         with self._db() as db:
-            self._require_draft(db, report_id)
+            row = self._require_draft(db, report_id)
+            if row["correction_pending"]:
+                raise InvalidTransitionError("a correction cannot be abandoned; complete and submit it")
             db.execute(
                 "UPDATE morning_reports SET status='abandoned', updated_at=CURRENT_TIMESTAMP WHERE id=%s",
                 (report_id,),
             )
         return self._load_report(report_id)
 
-    def _load_report(self, report_id: str) -> ShiftReport:
-        with self._db() as db:
+    def _load_report(self, report_id: str, *, db=None) -> ShiftReport:
+        with (nullcontext(db) if db is not None else self._db()) as db:
             row = db.execute("SELECT * FROM morning_reports WHERE id=%s", (report_id,)).fetchone()
             if row is None:
                 raise UnknownRecordError(f"unknown shift report: {report_id}")
@@ -1472,6 +1552,8 @@ class MorningStore:
             construction_work_reviewed_empty=bool(row.get("construction_work_reviewed_empty", False)),
             construction_outstanding_reviewed_empty=bool(row.get("construction_outstanding_reviewed_empty", False)),
             submitted_at=_iso(row["submitted_at"]),
+            revision=row.get("revision", 0),
+            correction_pending=bool(row.get("correction_pending", False)),
         )
 
     # -- machine state ----------------------------------------------------

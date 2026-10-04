@@ -7,7 +7,7 @@ import { MorningIcon } from './ui'
 
 function when(value: string | null): string { return value ? new Date(value).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : '' }
 
-export function Home({ principal, hasDraft, demoMode = false, onOpenReport }: { principal: MorningPrincipal; hasDraft: boolean; demoMode?: boolean; onOpenReport: () => void }) {
+export function Home({ principal, hasDraft, demoMode = false, onOpenReport, onNewReport }: { principal: MorningPrincipal; hasDraft: boolean; demoMode?: boolean; onOpenReport: () => void; onNewReport: () => void }) {
   const qc = useQueryClient()
   const [reportTab, setReportTab] = useState<'shift'|'daily'>('shift')
   const query = useQuery({ queryKey: ['morning-home'], queryFn: () => morningApi<HomeData>('/api/morning/home') })
@@ -44,6 +44,7 @@ export function Home({ principal, hasDraft, demoMode = false, onOpenReport }: { 
       <button type="button" className="primary morning-home-primary" onClick={onOpenReport}><MorningIcon name="report"/><span><strong>{hasDraft ? 'Continue current report' : demoMode ? 'Start demo TMM report' : 'Start new TMM report'}</strong><small>{hasDraft ? 'Pick up exactly where you left off' : 'Begin the guided shift workflow'}</small></span><b>›</b></button>
     </section>
 
+    <button type="button" className="primary" onClick={onNewReport}>Choose date / shift · new report or correction</button>
     <div className="morning-home-quickgrid">
       <a href="#recent-reports" className="morning-quick-card"><MorningIcon name="report"/><span><strong>Recent reports</strong><small>{data?.recent_reports.length || 0} available</small></span><b>›</b></a>
       <a href="#notice-board" className="morning-quick-card notice"><MorningIcon name="notice"/><span><strong>Notice board</strong><small>{data?.announcements.length || 0} notices</small></span><b>›</b></a>

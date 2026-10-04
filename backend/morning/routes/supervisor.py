@@ -21,10 +21,13 @@ def _error_status(exc: MorningError) -> int:
     return 404 if isinstance(exc, UnknownRecordError) else 400
 
 
-def _report_owned_by(runtime, report_id: str, principal_id: str):
+def _report_owned_by(runtime, report_id: str, principal_id: str, request=None):
     report = runtime.get_report(report_id)
     if report.supervisor_principal_id != principal_id:
         raise UnknownRecordError(f"unknown shift report: {report_id}")
+    if request is not None and request.method not in {"GET", "HEAD"} and report.revision > 0:
+        if request.headers.get("X-Morning-Report-Revision") != str(report.revision):
+            raise MorningError("report version changed; reopen it before editing or submitting")
     return report
 
 
@@ -219,7 +222,7 @@ async def get_roster(request: Request) -> JSONResponse:
     if not report_id:
         return JSONResponse({"people": []})
     try:
-        report = _report_owned_by(runtime, report_id, gate.principal_id)
+        report = _report_owned_by(runtime, report_id, gate.principal_id, request)
     except MorningError as exc:
         return JSONResponse({"error": str(exc)}, status_code=_error_status(exc))
     if report.status != "draft":
@@ -234,7 +237,7 @@ async def get_report_participants(request: Request) -> JSONResponse:
     report_id = request.path_params["report_id"]
     runtime = _runtime(request)
     try:
-        _report_owned_by(runtime, report_id, gate.principal_id)
+        _report_owned_by(runtime, report_id, gate.principal_id, request)
         people = runtime.report_participants(report_id)
     except MorningError as exc:
         return JSONResponse({"error": str(exc)}, status_code=_error_status(exc))
@@ -269,12 +272,12 @@ async def start_draft(request: Request) -> JSONResponse:
             return JSONResponse({"error": "crew_ids must be a list"}, status_code=400)
         report = runtime.start_draft(
             gate.principal_id, shift_date=shift_date, shift_kind=shift_kind, reporting_model=reporting_model,
-            crew_ids=tuple(str(item) for item in crew_ids_raw),
+            crew_ids=tuple(str(item) for item in crew_ids_raw), exact_date=bool(body.get("exact_date")),
         )
     except json.JSONDecodeError:
         return JSONResponse({"error": "invalid json"}, status_code=400)
-    except MorningError as exc:
-        return JSONResponse({"error": str(exc)}, status_code=_error_status(exc))
+    except (MorningError, ValueError) as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
     return JSONResponse(report.as_dict(), status_code=201)
 
 
@@ -304,7 +307,7 @@ async def set_attendance(request: Request) -> JSONResponse:
     runtime = _runtime(request)
     report_id = request.path_params["report_id"]
     try:
-        _report_owned_by(runtime, report_id, gate.principal_id)
+        _report_owned_by(runtime, report_id, gate.principal_id, request)
         body = await request.json()
         entries = tuple(
             AttendanceEntry(person_id=str(item["person_id"]), present=bool(item["present"]))
@@ -327,7 +330,7 @@ async def set_brothers_keeper(request: Request) -> JSONResponse:
     runtime = _runtime(request)
     report_id = request.path_params["report_id"]
     try:
-        _report_owned_by(runtime, report_id, gate.principal_id)
+        _report_owned_by(runtime, report_id, gate.principal_id, request)
         body = await request.json() or {}
         report = runtime.set_brothers_keeper(report_id, str(body.get("contribution") or ""))
     except json.JSONDecodeError:
@@ -344,7 +347,7 @@ async def add_stop_fix(request: Request) -> JSONResponse:
     runtime = _runtime(request)
     report_id = request.path_params["report_id"]
     try:
-        _report_owned_by(runtime, report_id, gate.principal_id)
+        _report_owned_by(runtime, report_id, gate.principal_id, request)
         body = await request.json() or {}
         report = runtime.add_stop_fix(
             report_id,
@@ -369,7 +372,7 @@ async def update_stop_fix(request: Request) -> JSONResponse:
     runtime = _runtime(request)
     report_id = request.path_params["report_id"]
     try:
-        _report_owned_by(runtime, report_id, gate.principal_id)
+        _report_owned_by(runtime, report_id, gate.principal_id, request)
         body = await request.json() or {}
         fields = {
             key: str(body[key])
@@ -399,7 +402,7 @@ async def add_card(request: Request) -> JSONResponse:
     runtime = _runtime(request)
     report_id = request.path_params["report_id"]
     try:
-        _report_owned_by(runtime, report_id, gate.principal_id)
+        _report_owned_by(runtime, report_id, gate.principal_id, request)
         body = await request.json() or {}
         report = runtime.add_card(
             report_id,
@@ -424,7 +427,7 @@ async def add_machine_event(request: Request) -> JSONResponse:
     runtime = _runtime(request)
     report_id = request.path_params["report_id"]
     try:
-        _report_owned_by(runtime, report_id, gate.principal_id)
+        _report_owned_by(runtime, report_id, gate.principal_id, request)
         body = await request.json() or {}
         report = runtime.add_machine_event(
             report_id,
@@ -448,7 +451,7 @@ async def update_machine_event(request: Request) -> JSONResponse:
     runtime = _runtime(request)
     report_id = request.path_params["report_id"]
     try:
-        _report_owned_by(runtime, report_id, gate.principal_id)
+        _report_owned_by(runtime, report_id, gate.principal_id, request)
         body = await request.json() or {}
         report = runtime.update_machine_event(
             report_id,
@@ -477,7 +480,7 @@ async def add_machine_state(request: Request) -> JSONResponse:
     runtime = _runtime(request)
     report_id = request.path_params["report_id"]
     try:
-        _report_owned_by(runtime, report_id, gate.principal_id)
+        _report_owned_by(runtime, report_id, gate.principal_id, request)
         body = await request.json() or {}
         state = runtime.declare_machine_state(
             report_id,
@@ -501,7 +504,7 @@ async def list_machine_states(request: Request) -> JSONResponse:
     runtime = _runtime(request)
     report_id = request.path_params["report_id"]
     try:
-        _report_owned_by(runtime, report_id, gate.principal_id)
+        _report_owned_by(runtime, report_id, gate.principal_id, request)
         states = runtime.machine_states_for_report(report_id)
     except MorningError as exc:
         return JSONResponse({"error": str(exc)}, status_code=_error_status(exc))
@@ -515,7 +518,7 @@ async def add_construction_work(request: Request) -> JSONResponse:
     runtime = _runtime(request)
     report_id = request.path_params["report_id"]
     try:
-        _report_owned_by(runtime, report_id, gate.principal_id)
+        _report_owned_by(runtime, report_id, gate.principal_id, request)
         body = await request.json() or {}
         raw_progress = body.get("progress_percent")
         progress = None if raw_progress in (None, "") else int(raw_progress)
@@ -542,7 +545,7 @@ async def update_construction_work(request: Request) -> JSONResponse:
     runtime = _runtime(request)
     report_id = request.path_params["report_id"]
     try:
-        _report_owned_by(runtime, report_id, gate.principal_id)
+        _report_owned_by(runtime, report_id, gate.principal_id, request)
         body = await request.json() or {}
         fields = {key: body[key] for key in ("kind", "level", "location", "task", "status", "update_text", "constraint_text", "next_action") if key in body}
         if "progress_percent" in body:
@@ -570,7 +573,7 @@ async def add_other_activity(request: Request) -> JSONResponse:
     runtime = _runtime(request)
     report_id = request.path_params["report_id"]
     try:
-        _report_owned_by(runtime, report_id, gate.principal_id)
+        _report_owned_by(runtime, report_id, gate.principal_id, request)
         body = await request.json() or {}
         report = runtime.add_other_activity(
             report_id,
@@ -595,7 +598,7 @@ async def set_section_resolution(request: Request) -> JSONResponse:
     runtime = _runtime(request)
     report_id = request.path_params["report_id"]
     try:
-        _report_owned_by(runtime, report_id, gate.principal_id)
+        _report_owned_by(runtime, report_id, gate.principal_id, request)
         body = await request.json() or {}
         report = runtime.set_empty_section_reviewed(
             report_id, section=str(body.get("section") or ""), reviewed=bool(body.get("reviewed")),
@@ -641,7 +644,7 @@ async def submit_report(request: Request) -> JSONResponse:
     runtime = _runtime(request)
     report_id = request.path_params["report_id"]
     try:
-        _report_owned_by(runtime, report_id, gate.principal_id)
+        _report_owned_by(runtime, report_id, gate.principal_id, request)
         report = runtime.submit_report(report_id)
     except IncompleteReportError as exc:
         return JSONResponse(
@@ -653,6 +656,32 @@ async def submit_report(request: Request) -> JSONResponse:
     return JSONResponse(report.as_dict())
 
 
+async def begin_correction(request: Request) -> JSONResponse:
+    gate = require_mutation_auth(request)
+    if isinstance(gate, JSONResponse):
+        return gate
+    runtime = _runtime(request)
+    try:
+        report = _report_owned_by(runtime, request.path_params["report_id"], gate.principal_id, request)
+        report = runtime.store.begin_correction(report.id)
+    except MorningError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=_error_status(exc))
+    return JSONResponse(report.as_dict())
+
+
+async def report_versions(request: Request) -> JSONResponse:
+    gate = require_session(request)
+    if isinstance(gate, JSONResponse):
+        return gate
+    runtime = _runtime(request)
+    try:
+        report = _report_owned_by(runtime, request.path_params["report_id"], gate.principal_id, request)
+        versions = runtime.store.report_versions(report.id)
+    except MorningError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=_error_status(exc))
+    return JSONResponse({"versions": list(versions)})
+
+
 async def abandon_report(request: Request) -> JSONResponse:
     gate = require_mutation_auth(request)
     if isinstance(gate, JSONResponse):
@@ -660,7 +689,7 @@ async def abandon_report(request: Request) -> JSONResponse:
     runtime = _runtime(request)
     report_id = request.path_params["report_id"]
     try:
-        _report_owned_by(runtime, report_id, gate.principal_id)
+        _report_owned_by(runtime, report_id, gate.principal_id, request)
         report = runtime.abandon_draft(report_id)
     except MorningError as exc:
         return JSONResponse({"error": str(exc)}, status_code=_error_status(exc))
@@ -674,7 +703,7 @@ async def get_whatsapp_text(request: Request) -> JSONResponse:
     runtime = _runtime(request)
     report_id = request.path_params["report_id"]
     try:
-        _report_owned_by(runtime, report_id, gate.principal_id)
+        _report_owned_by(runtime, report_id, gate.principal_id, request)
         output = runtime.whatsapp_text(report_id)
     except MorningError as exc:
         return JSONResponse({"error": str(exc)}, status_code=_error_status(exc))
@@ -688,7 +717,7 @@ async def _delete_owned(request: Request, item_key: str, action) -> JSONResponse
     runtime = _runtime(request)
     report_id = request.path_params["report_id"]
     try:
-        _report_owned_by(runtime, report_id, gate.principal_id)
+        _report_owned_by(runtime, report_id, gate.principal_id, request)
         report = action(runtime, report_id, request.path_params[item_key])
     except MorningError as exc:
         return JSONResponse({"error": str(exc)}, status_code=_error_status(exc))
@@ -696,6 +725,8 @@ async def _delete_owned(request: Request, item_key: str, action) -> JSONResponse
 
 
 routes = [
+    Route("/api/morning/reports/{report_id}/correct", begin_correction, methods=["POST"]),
+    Route("/api/morning/reports/{report_id}/versions", report_versions, methods=["GET"]),
     Route("/api/morning/shift", get_shift, methods=["GET"]),
     Route("/api/morning/me", get_me, methods=["GET"]),
     Route("/api/morning/machines", list_active_machines, methods=["GET"]),

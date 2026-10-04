@@ -30,7 +30,7 @@ class FakeStore:
             )
         }
 
-    def list_reports(self):
+    def list_reports(self, *, status=None):
         return self.reports
 
     def list_persons(self):

@@ -160,6 +160,19 @@ export function createOfflineReport(body: Record<string, unknown>): ShiftReport 
   const shiftDate = String(body.shift_date || '')
   const shiftKind = String(body.shift_kind || '') as ShiftKind
   const reportingModel = String(body.reporting_model || 'tmm') as ReportingModel
+  const principal = getOfflinePrincipal()
+  if (principal) {
+    const prefix = `${ROOT}.${principal}.draft.id.`
+    for (let index = 0; index < localStorage.length; index += 1) {
+      const key = localStorage.key(index)
+      if (!key?.startsWith(prefix)) continue
+      const cached = readJson<OfflineDraft>(key)
+      if (cached && cached.report.shift_date === shiftDate && cached.report.shift_kind === shiftKind
+          && cached.report.reporting_model === reportingModel && cached.report.status !== 'abandoned') {
+        return saveOfflineDraft(cached.report, cached.pending, true)
+      }
+    }
+  }
   const crewIds = Array.isArray(body.crew_ids) ? body.crew_ids.map(String).filter(Boolean) : []
   if (reportingModel === 'tmm' && !crewIds.length) throw new Error('Select at least one crew before starting the report.')
   if (reportingModel === 'construction' && !supervisor.crew_id) throw new Error('No cached Construction crew is available.')

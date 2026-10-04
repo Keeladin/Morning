@@ -25,6 +25,7 @@ EXPECTED_TABLES = {
     "morning_persons",
     "morning_principals",
     "morning_reports",
+    "morning_report_versions",
     "morning_shift_policy",
     "morning_stop_fix",
 }

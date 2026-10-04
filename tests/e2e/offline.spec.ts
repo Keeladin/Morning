@@ -38,7 +38,7 @@ test('can cold-start and create a TMM report with the network offline', async ({
   await page.goto('/')
   await expect(page.getByRole('heading', { name: 'Good morning, Jaco Fouche' })).toBeVisible()
   await page.getByRole('button', { name: /Start new TMM report/ }).click()
-  await expect(page.getByRole('heading', { name: 'Start shift report' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Choose date and shift' })).toBeVisible()
   await page.evaluate(async () => {
     const registration = await navigator.serviceWorker.ready
     await registration.update()
@@ -51,9 +51,9 @@ test('can cold-start and create a TMM report with the network offline', async ({
 
   await expect(page.getByRole('heading', { name: 'Good morning, Jaco Fouche' })).toBeVisible()
   await page.getByRole('button', { name: /Start new TMM report/ }).click()
-  await expect(page.getByRole('heading', { name: 'Start shift report' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Choose date and shift' })).toBeVisible()
   await page.getByRole('checkbox', { name: 'Maintenance' }).check()
-  const start = page.getByRole('button', { name: 'Start report' })
+  const start = page.getByRole('button', { name: 'Open / start report' })
   await expect(start).toBeEnabled()
   await start.click()
 

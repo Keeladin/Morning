@@ -171,8 +171,7 @@ def test_submit_freezes_report_mutations(store: MorningStore) -> None:
     assert submitted.submitted_at is not None
     with pytest.raises(InvalidTransitionError):
         store.replace_attendance(draft.id, ())
-    with pytest.raises(InvalidTransitionError):
-        store.submit_report(draft.id)
+    assert store.submit_report(draft.id).submitted_at == submitted.submitted_at
 
 
 def test_attendance_safety_cards_and_other_activity_round_trip(store: MorningStore) -> None:

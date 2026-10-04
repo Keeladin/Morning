@@ -543,7 +543,7 @@ def test_tmm_multicrew_selection_combines_roster(client: TestClient) -> None:
     assert submitted.json()["status"] == "submitted"
 
 
-def test_existing_draft_rejects_changed_crew_selection(client: TestClient) -> None:
+def test_existing_slot_resumes_without_changing_crew_selection(client: TestClient) -> None:
     admin = _admin(client)
     admin_headers = {"X-CSRF-Token": admin["csrf_token"]}
     crew_a = client.post("/api/morning/admin/crews", json={"name": "Crew A"}, headers=admin_headers).json()
@@ -563,8 +563,9 @@ def test_existing_draft_rejects_changed_crew_selection(client: TestClient) -> No
         json={"shift_date": "2026-09-10", "shift_kind": "morning", "crew_ids": [crew_b["id"]]},
         headers=headers,
     )
-    assert changed.status_code == 400
-    assert "different crew selection" in changed.json()["error"]
+    assert changed.status_code == 201
+    assert changed.json()["id"] == first.json()["id"]
+    assert changed.json()["crew_ids"] == [crew_a["id"]]
     current = browser.get("/api/morning/draft?reporting_model=tmm").json()["report"]
     assert current["crew_ids"] == [crew_a["id"]]
 
@@ -641,3 +642,39 @@ def test_demo_supervisor_cannot_write_operational_report(client: TestClient) -> 
             assert connection.execute(text("SELECT count(*) FROM morning_reports")).scalar_one() == 0
     finally:
         engine.dispose()
+
+
+def test_correction_routes_require_owner_and_preserve_audit(client):
+    admin = _admin(client)
+    admin_headers = {"X-CSRF-Token": admin["csrf_token"]}
+    login = _supervisor(client, admin_headers)
+    store = client.app.state.morning_store
+    owner = login["principal"]["principal_id"]
+    crew = store.create_crew(name="Correction Crew")
+    person = store.create_person(name="Reporter", employee_number=None, role="Supervisor", crew_id=crew.id)
+    from morning.models import AttendanceEntry
+    report = store.get_or_create_draft(supervisor_principal_id=owner, shift_date="2026-10-02", shift_kind="morning", crew_id=crew.id, crew_ids=(crew.id,))
+    store.replace_attendance(report.id, (AttendanceEntry(person.id, True),))
+    store.set_brothers_keeper(report.id, "Original")
+    for section in ("safety", "machine_activity", "other_activities"):
+        store.set_empty_section_reviewed(report.id, section, True)
+    store.submit_report(report.id)
+    assert client.post(f"/api/morning/reports/{report.id}/correct", headers=admin_headers).status_code == 404
+    browser = TestClient(client.app)
+    session = _login(browser, "jurie", "correct-horse")
+    headers = {"X-CSRF-Token": session["csrf_token"]}
+    assert browser.post(f"/api/morning/reports/{report.id}/correct").status_code == 403
+    opened = browser.post(f"/api/morning/reports/{report.id}/correct", headers=headers)
+    assert opened.status_code == 200, opened.text
+    assert opened.json()["correction_pending"]
+    stale = browser.put(f"/api/morning/reports/{report.id}/brothers-keeper", json={"contribution": "Stale old client"}, headers=headers)
+    assert stale.status_code == 400
+    headers["X-Morning-Report-Revision"] = str(opened.json()["revision"])
+    changed = browser.put(f"/api/morning/reports/{report.id}/brothers-keeper", json={"contribution": "Corrected"}, headers=headers)
+    assert changed.status_code == 200, changed.text
+    receipt = browser.post("/api/morning/offline-sync", json={"report": changed.json(), "submit": True}, headers=headers)
+    assert receipt.status_code == 200, receipt.text
+    assert receipt.json()["status"] == "submitted"
+    versions = browser.get(f"/api/morning/reports/{report.id}/versions")
+    assert versions.status_code == 200, versions.text
+    assert [item["snapshot"]["brothers_keeper"] for item in versions.json()["versions"]] == ["Original", "Corrected"]
