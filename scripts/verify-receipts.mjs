@@ -53,6 +53,7 @@ try {
     await page.getByRole('button',{name:'Open / start report',exact:true}).click()
     await page.getByRole('heading',{name:'Attendance',exact:true}).waitFor()
     assert.equal(await page.getByRole('heading',{name:'Report submitted!'}).count(),0)
+    assert.equal(await page.getByText(/Received by Morning at/).count(),0, 'A new draft must not display the previous report receipt')
     assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth), 'No horizontal overflow')
     assert.deepEqual(errors,[])
     await page.screenshot({path:`/tmp/morning-receipts-${viewport.width}.png`,fullPage:true})
