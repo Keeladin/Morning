@@ -218,6 +218,12 @@ export async function morningApi<T = unknown>(path: string, init: RequestInit = 
   const method = (init.method || 'GET').toUpperCase()
   if (method !== 'GET' && method !== 'HEAD' && csrfToken) headers.set('X-CSRF-Token', csrfToken)
   const targetReport = path.match(/^\/api\/morning\/reports\/([^/]+)/)
+  // A selected offline report may not have a server ID yet. Keep its pending
+  // snapshot visible during reconnect; synchronization supplies the canonical ID.
+  if (method === 'GET' && /^\/api\/morning\/reports\/[^/]+$/.test(path)) {
+    const local = offlineDraftById(decodeURIComponent(targetReport![1]))
+    if (local?.pending) { scheduleOfflineSync(); return local.report as T }
+  }
   if (targetReport && method !== 'GET' && method !== 'HEAD') headers.set('X-Morning-Report-Revision', String(offlineDraftById(targetReport[1])?.report.revision ?? 0))
   const statePost = path.match(/^\/api\/morning\/reports\/([^/]+)\/machine-states$/)
   const offlineState = () => {

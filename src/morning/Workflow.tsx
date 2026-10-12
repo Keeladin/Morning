@@ -58,15 +58,25 @@ export function Workflow({ principal, reportingModel = 'tmm' }: { principal: Mor
   const [surface, setSurface] = useState<'home' | 'report'>(construction ? 'report' : 'home')
   const [sync, setSync] = useState<SyncState>({ status: navigator.onLine ? 'idle' : 'offline' })
   const [selectingSlot, setSelectingSlot] = useState(false)
+  const [selectedReportId, setSelectedReportId] = useState<string | null>(null)
   const [resumed, setResumed] = useState(false)
   const initializedReport = useRef('')
   const queryClient = useQueryClient()
   const shiftQuery = useQuery({ queryKey: ['morning-shift'], queryFn: () => morningApi<ShiftIdentity>('/api/morning/shift') })
   const meQuery = useQuery({ queryKey: ['morning-me'], queryFn: () => morningApi<SupervisorContext>('/api/morning/me') })
-  const draftQuery = useQuery({ queryKey: ['morning-draft', reportingModel], queryFn: () => morningApi<{ report: ShiftReport | null }>(`/api/morning/draft?reporting_model=${reportingModel}`) })
+  // Discover the latest draft only until a report has been selected. Refetches
+  // must refresh that report, not resolve a different date/shift's latest draft.
+  const reportKey = (id: string | null) => ['morning-draft', principal.principal_id, reportingModel, id]
+  const draftQuery = useQuery({ queryKey: reportKey(selectedReportId), queryFn: async () => selectedReportId
+    ? { report: await morningApi<ShiftReport>(`/api/morning/reports/${encodeURIComponent(selectedReportId)}`) }
+    : morningApi<{ report: ShiftReport | null }>(`/api/morning/draft?reporting_model=${reportingModel}`) })
   const machinesQuery = useQuery({ queryKey: ['morning-machines'], queryFn: () => morningApi<{ machines: Machine[] }>('/api/morning/machines'), enabled: !construction })
   const crewsQuery = useQuery({ queryKey: ['morning-tmm-crews'], queryFn: () => morningApi<{ crews: Crew[] }>('/api/morning/crews'), enabled: !construction })
   const report = draftQuery.data?.report ?? null
+  // Local-to-server ID reconciliation is still the same editing session.
+  const reportIdentity = report ? [report.supervisor_principal_id, report.reporting_model, report.shift_date, report.shift_kind, report.revision ?? 0].join(':') : ''
+  const activeReport = useRef(report)
+  activeReport.current = report
   const rosterQuery = useQuery({ queryKey: ['morning-roster', report?.id], queryFn: () => morningApi<{ people: Person[] }>(`/api/morning/roster?report_id=${encodeURIComponent(report?.id || '')}`), enabled: construction && Boolean(report) })
   const tmmPersonnelQuery = useQuery({ queryKey: ['morning-tmm-personnel'], queryFn: () => morningApi<{ people: Person[] }>('/api/morning/personnel'), enabled: !construction })
   const participantsQuery = useQuery({ queryKey: ['morning-participants', report?.id], queryFn: () => morningApi<{ people: Person[] }>(`/api/morning/reports/${report?.id}/participants`), enabled: Boolean(report) && report?.status === 'submitted' })
@@ -78,8 +88,25 @@ export function Workflow({ principal, reportingModel = 'tmm' }: { principal: Mor
   const reportPeople = (report?.status === 'submitted' && !principal.demo_mode ? participantsQuery.data?.people : rosterPeople) || []
   const selectedCrewNames = report ? crews.filter(crew => report.crew_ids.includes(crew.id)).map(crew => crew.name) : []
   const completion = useMemo(() => report ? sectionCompletion(report, rosterPeople, stages) : null, [report, rosterPeople, construction])
-  const refreshReport = (updated: ShiftReport) => queryClient.setQueryData(['morning-draft', reportingModel], { report: updated })
-  const abandon = useMutation({ mutationFn: () => morningApi<ShiftReport>(`/api/morning/reports/${report?.id}/abandon`, { method: 'POST', body: '{}' }), onSuccess: () => queryClient.setQueryData(['morning-draft', reportingModel], { report: null }) })
+  const selectReport = (updated: ShiftReport) => {
+    activeReport.current = updated
+    void queryClient.cancelQueries({ queryKey: reportKey(updated.id), exact: true })
+    queryClient.setQueryData(reportKey(updated.id), { report: updated })
+    setSelectedReportId(updated.id)
+  }
+  const matchesActiveReport = (updated: ShiftReport) => {
+    const active = activeReport.current
+    return Boolean(active && updated.supervisor_principal_id === active.supervisor_principal_id
+      && updated.reporting_model === active.reporting_model && updated.shift_date === active.shift_date
+      && updated.shift_kind === active.shift_kind && (updated.revision ?? 0) >= (active.revision ?? 0))
+  }
+  const refreshReport = (updated: ShiftReport) => {
+    if (matchesActiveReport(updated)) selectReport(updated)
+  }
+  const abandon = useMutation({ mutationFn: () => morningApi<ShiftReport>(`/api/morning/reports/${report?.id}/abandon`, { method: 'POST', body: '{}' }), onSuccess: () => { queryClient.setQueryData(reportKey(selectedReportId), { report: null }); setSelectingSlot(true) } })
+  useEffect(() => {
+    if (!selectedReportId && report) selectReport(report)
+  }, [selectedReportId, report])
   useEffect(() => {
     const online = () => {
       setSync(current => current.status === 'offline' ? { status: 'saving', message: 'Connection restored — synchronizing local changes…' } : current)
@@ -88,8 +115,13 @@ export function Workflow({ principal, reportingModel = 'tmm' }: { principal: Mor
     const offline = () => setSync({ status: 'offline', message: 'Working offline — changes are saved on this device and will synchronize automatically.' })
     const synced = (event: Event) => {
       const updated = (event as CustomEvent<{ report: ShiftReport }>).detail?.report
-      if (!updated || updated.reporting_model !== reportingModel) return
-      if (!report || (updated.shift_date === report.shift_date && updated.shift_kind === report.shift_kind)) refreshReport(updated); setSync({ status: 'saved', message: updated.status === 'submitted' && updated.submitted_at ? `Received by Morning at ${new Date(updated.submitted_at).toLocaleString()}.` : 'Local changes synchronized with Morning.' }); void queryClient.invalidateQueries({ queryKey: ['morning-daily-reports'] }); void queryClient.invalidateQueries({ queryKey: ['morning-home'] })
+      if (!updated || updated.reporting_model !== reportingModel || updated.supervisor_principal_id !== principal.principal_id) return
+      if (matchesActiveReport(updated)) {
+        refreshReport(updated)
+        setSync({ status: 'saved', message: updated.status === 'submitted' && updated.submitted_at ? `Received by Morning at ${new Date(updated.submitted_at).toLocaleString()}.` : 'Local changes synchronized with Morning.' })
+      }
+      void queryClient.invalidateQueries({ queryKey: ['morning-daily-reports'] })
+      void queryClient.invalidateQueries({ queryKey: ['morning-home'] })
     }
     const failed = (event: Event) => {
       const message = (event as CustomEvent<{ message?: string }>).detail?.message
@@ -101,29 +133,29 @@ export function Workflow({ principal, reportingModel = 'tmm' }: { principal: Mor
       window.removeEventListener('online', online); window.removeEventListener('offline', offline)
       window.removeEventListener('morning:report-synced', synced); window.removeEventListener('morning:sync-failed', failed)
     }
-  }, [reportingModel, report?.id])
+  }, [reportingModel, principal.principal_id])
   useEffect(() => {
     if (report && isOfflineReportPending(report.id)) {
       setSync({ status: 'offline', message: navigator.onLine ? 'Saved locally — waiting to synchronize with Morning.' : 'Working offline — changes are saved on this device and will synchronize automatically.' })
     }
   }, [report?.id, report?.updated_at])
   useEffect(() => {
-    if (report?.status === 'draft' && rosterPeople.length && initializedReport.current !== report.id) {
+    if (report?.status === 'draft' && rosterPeople.length && initializedReport.current !== reportIdentity) {
       const hasConstruction = report.construction_work.length > 0 || report.construction_work_reviewed_empty || report.construction_outstanding_reviewed_empty
       const hasTmm = report.machine_events.length > 0 || report.other_activities.length > 0 || report.machine_activity_reviewed_empty || report.other_activities_reviewed_empty
       setStage(resumeStage(report, rosterPeople, stages))
       setResumed(report.attendance.length > 0 || Boolean(report.brothers_keeper) || report.stop_fix.length > 0 || report.cards.length > 0 || hasConstruction || hasTmm || report.safety_reviewed_empty)
-      initializedReport.current = report.id
+      initializedReport.current = reportIdentity
     }
   }, [report, rosterPeople, construction])
   const confirmAndAbandon = () => { if (report && window.confirm('Abandon this draft? You will not be able to resume it.')) abandon.mutate() }
   if (shiftQuery.isError || draftQuery.isError) return <div className="offline-banner">Could not reach Morning. Check your connection.</div>
   if (shiftQuery.isLoading || draftQuery.isLoading || meQuery.isLoading) return <p className="morning-loading">Loading your shift…</p>
   if (!construction && surface === 'home') return <Home principal={principal} hasDraft={Boolean(report?.status === 'draft')} demoMode={Boolean(principal.demo_mode)} onOpenReport={() => setSurface('report')} onNewReport={() => { setSelectingSlot(true); setSurface('report') }} />
-  if (!report || selectingSlot) return <div className="morning-workflow"><StartReport suggestion={shiftQuery.data} supervisor={meQuery.data} crews={crews} reportingModel={reportingModel} demoMode={Boolean(principal.demo_mode)} onStarted={started => { refreshReport(started); setSync({ status: isOfflineReportPending(started.id) ? 'offline' : 'idle' }); setResumed(false); setSelectingSlot(false); initializedReport.current = ''; setStage('attendance') }} /></div>
-  if (report.status === 'submitted') return <div className="morning-workflow"><ReviewStage report={report} machines={machines} people={reportPeople} principal={principal} submitted onSelect={() => setSelectingSlot(true)} onCorrect={refreshReport} onHome={!construction ? () => setSurface('home') : undefined} /></div>
+  if (!report || selectingSlot) return <div className="morning-workflow"><StartReport suggestion={shiftQuery.data} supervisor={meQuery.data} crews={crews} reportingModel={reportingModel} demoMode={Boolean(principal.demo_mode)} onStarted={started => { selectReport(started); setSync({ status: isOfflineReportPending(started.id) ? 'offline' : 'idle' }); setResumed(false); setSelectingSlot(false); initializedReport.current = ''; setStage('attendance') }} /></div>
+  if (report.status === 'submitted') return <div className="morning-workflow" key={`${reportIdentity}:submitted`}><ReviewStage report={report} machines={machines} people={reportPeople} principal={principal} submitted onSelect={() => setSelectingSlot(true)} onCorrect={refreshReport} onHome={!construction ? () => setSurface('home') : undefined} /></div>
 
-  return <div className={construction ? 'morning-workflow construction-workflow' : 'morning-workflow'}>
+  return <div key={`${reportIdentity}:draft`} className={construction ? 'morning-workflow construction-workflow' : 'morning-workflow'}>
     {principal.demo_mode ? <div className="morning-demo-banner"><strong>DEMO MODE</strong><span>Walk through the real workflow — nothing in this report will be saved to production.</span></div> : null}
     {construction ? <div className="construction-workspace-strip"><span>Morning / Construction</span><strong>Shift reporting</strong></div> : null}
     <div className="morning-shift-banner"><div className="morning-shift-banner-info"><strong>{shiftLabel(report.shift_kind)}</strong><span>{report.shift_date}{!construction && selectedCrewNames.length ? ` · ${selectedCrewNames.join(' + ')}` : ''}</span></div><div className="morning-shift-actions">{!construction ? <button type="button" className="ghost" onClick={() => setSurface('home')}>Home</button> : null}<button type="button" className="ghost" onClick={() => setSelectingSlot(true)}>Choose date / shift</button>{!report.correction_pending ? <button type="button" className="ghost" onClick={confirmAndAbandon} disabled={abandon.isPending}>Abandon draft</button> : null}</div></div>

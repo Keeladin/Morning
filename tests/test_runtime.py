@@ -452,6 +452,36 @@ def test_explicit_slot_ignores_clock_and_resumes_without_crew_selection(runtime)
     assert app.submit_report(report.id).submitted_at == submitted.submitted_at
 
 
+@pytest.mark.parametrize("now", [
+    "2026-10-11T23:00:00",  # Sunday night reports against Monday.
+    "2026-10-12T05:59:00", "2026-10-12T06:00:00",
+    "2026-10-12T13:59:00", "2026-10-12T14:00:00",
+    "2026-10-12T21:59:00", "2026-10-12T22:00:00",
+])
+def test_submitted_slot_does_not_block_other_dates_or_shifts(runtime, now):
+    app, store, supervisor = runtime
+    app = MorningRuntime(store, app.accounts, clock=lambda: datetime.fromisoformat(now).replace(tzinfo=ZONE))
+    original = _ready_report(app, store, supervisor, shift_date="2026-10-12")
+    submitted = app.submit_report(original.id)
+    ids = {original.id}
+    for shift_date, shift_kind in (("2026-10-12", "afternoon"), ("2026-10-12", "night"), ("2026-10-13", "morning")):
+        draft = app.start_draft(
+            supervisor.principal_id, shift_date=shift_date, shift_kind=shift_kind,
+            crew_ids=original.crew_ids, exact_date=True,
+        )
+        assert (draft.shift_date, draft.shift_kind, draft.status) == (shift_date, shift_kind, "draft")
+        assert draft.id not in ids
+        ids.add(draft.id)
+        assert app.start_draft(
+            supervisor.principal_id, shift_date=shift_date, shift_kind=shift_kind, exact_date=True,
+        ).id == draft.id
+    reopened = app.start_draft(
+        supervisor.principal_id, shift_date="2026-10-12", shift_kind="morning", exact_date=True,
+    )
+    assert reopened.id == original.id and reopened.status == "submitted"
+    assert reopened.submitted_at == submitted.submitted_at
+
+
 def test_correction_preserves_published_report_and_rejects_old_replay(runtime):
     app, store, supervisor = runtime
     report = _ready_report(app, store, supervisor)
